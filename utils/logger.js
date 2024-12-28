@@ -2,9 +2,8 @@ const { MongoClient } = require('mongodb');
 const { DateTime } = require('luxon');
 
 // MongoDB connection string
-//const MONGO_URI = process.env.MONGO_URI; // Add this to your environment variables
 
-const MONGO_URI = "mongodb+srv://vikashbro111:Zvje8C31Sr2SkITq@logsdb.znxv1.mongodb.net/?retryWrites=true&w=majority&appName=logsDB"; // Add this to your environment variables
+const MONGO_URI = process.env.MONGO_URI; // Add this to your environment variables
 
 // Create a new MongoClient instance
 const client = new MongoClient(MONGO_URI, { useNewUrlParser: true, useUnifiedTopology: true });
