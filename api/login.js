@@ -10,7 +10,7 @@ const JWT_SECRET = process.env.JWT_SECRET;
 const HASHED_APP_SIGNATURE = process.env.HASHED_APP_SIGNATURE;
 
 module.exports = async (req, res) => {
-  logLogin(`Incoming request: ${JSON.stringify(req.body)}`);
+  logLogin('Incoming request for login.', req.body);
 
   if (req.method !== 'POST') {
     logLogin('Method not allowed.');
@@ -23,14 +23,14 @@ module.exports = async (req, res) => {
     // Verify app signature
     const isAppSignatureValid = await argon2.verify(HASHED_APP_SIGNATURE, hashedAppSignature);
     if (!isAppSignatureValid) {
-      logLogin('Unauthorized app attempt.');
+      logLogin('Unauthorized app attempt.', req.body);
       return res.status(403).json({ error: 'Unauthorized app.' });
     }
 
     // Fetch user by username
     const userSnapshot = await db.collection('users').where('username', '==', hashedUsername).get();
     if (userSnapshot.empty) {
-      logLogin('Invalid credentials: Username not found.');
+      logLogin('Invalid credentials: Username not found.', { hashedUsername });
       return res.status(401).json({ error: 'Invalid credentials.' });
     }
 
@@ -39,7 +39,7 @@ module.exports = async (req, res) => {
     // Verify password
     const isPasswordValid = await argon2.verify(user.password_hash, hashedPassword);
     if (!isPasswordValid) {
-      logLogin('Invalid credentials: Password mismatch.');
+      logLogin('Invalid credentials: Password mismatch.', { hashedUsername });
       return res.status(401).json({ error: 'Invalid credentials.' });
     }
 
@@ -62,10 +62,10 @@ module.exports = async (req, res) => {
       { merge: true }
     );
 
-    logLogin('Login successful.');
+    logLogin('Login successful.', { hashedUsername, sessionId });
     return res.status(200).json({ message: 'Login successful.', token });
   } catch (error) {
-    logLogin(`Login failed: ${error.message}`);
+    logLogin('Login failed.', { error: error.message });
     return res.status(500).json({ error: 'Login failed.', details: error.message });
   }
 };
