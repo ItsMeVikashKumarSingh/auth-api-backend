@@ -1,43 +1,61 @@
+const argon2 = require('argon2');
 const db = require('../utils/firebaseAdmin');
 const { logRegister } = require('../utils/logger');
+const { utils, ed25519 } = require('@noble/ed25519'); // For decryption
 require('dotenv').config();
 
+const PRIVATE_KEY_HEX = process.env.PRIVATE_KEY_HEX; // Store as hex in .env
 const HASHED_APP_SIGNATURE = process.env.HASHED_APP_SIGNATURE;
 
 module.exports = async (req, res) => {
-  logRegister('Incoming request for registration.', req.body);
+  logRegister('Incoming registration request.', { headers: req.headers });
 
   if (req.method !== 'POST') {
-    logRegister('Method not allowed.');
+    logRegister('Registration failed: Method not allowed.');
     return res.status(405).json({ error: 'Method not allowed.' });
   }
 
-  const { hashedUsername, hashedPassword, hashedAppSignature } = req.body;
-
   try {
-    // Verify app signature
-    if (hashedAppSignature !== HASHED_APP_SIGNATURE) {
-      logRegister('Unauthorized app attempt.', req.body);
+    const { encryptedData } = req.body;
+
+    if (!encryptedData) {
+      logRegister('Registration failed: Missing encrypted data.');
+      return res.status(400).json({ error: 'Missing encrypted data.' });
+    }
+
+    // Decrypt the encrypted message
+    const privateKeyBytes = utils.hexToBytes(PRIVATE_KEY_HEX);
+    const decryptedBytes = await ed25519.decrypt(encryptedData, privateKeyBytes);
+    const decryptedData = JSON.parse(Buffer.from(decryptedBytes).toString());
+
+    const { appSignature, username, password } = decryptedData;
+
+    // Verify the app signature
+    if (!appSignature || !(await argon2.verify(HASHED_APP_SIGNATURE, appSignature))) {
+      logRegister('Registration failed: Unauthorized app.', { appSignature });
       return res.status(403).json({ error: 'Unauthorized app.' });
     }
 
-    // Check if username already exists
-    const userSnapshot = await db.collection('users').where('username', '==', hashedUsername).get();
+    // Check if the username exists
+    const userSnapshot = await db.collection('users').where('username', '==', username).get();
     if (!userSnapshot.empty) {
-      logRegister('Attempt to register with an existing username.', { hashedUsername });
+      logRegister('Registration failed: Username already exists.', { username });
       return res.status(400).json({ error: 'Username already exists.' });
     }
 
+    // Hash the password
+    const passwordHash = await argon2.hash(password);
+
     // Store the user in Firestore
     await db.collection('users').add({
-      username: hashedUsername,
-      password_hash: hashedPassword, // Already hashed by the client
+      username,
+      password_hash: passwordHash,
     });
 
-    logRegister('User registered successfully.', { hashedUsername });
+    logRegister('User registered successfully.', { username });
     return res.status(201).json({ message: 'User registered successfully.' });
   } catch (error) {
-    logRegister('Registration failed.', { error: error.message });
+    logRegister('Registration failed due to server error.', { error: error.message });
     return res.status(500).json({ error: 'Registration failed.', details: error.message });
   }
 };
