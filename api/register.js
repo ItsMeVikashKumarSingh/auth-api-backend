@@ -1,5 +1,4 @@
 const db = require('../utils/firebaseAdmin');
-const argon2 = require('argon2');
 const { logRegister } = require('../utils/logger');
 require('dotenv').config();
 
@@ -17,24 +16,22 @@ module.exports = async (req, res) => {
 
   try {
     // Verify app signature
-    const isAppSignatureValid = await argon2.verify(HASHED_APP_SIGNATURE, hashedAppSignature);
-    if (!isAppSignatureValid) {
+    if (hashedAppSignature !== HASHED_APP_SIGNATURE) {
       logRegister('Unauthorized app attempt.', req.body);
       return res.status(403).json({ error: 'Unauthorized app.' });
     }
 
-    // Check if username exists
+    // Check if username already exists
     const userSnapshot = await db.collection('users').where('username', '==', hashedUsername).get();
     if (!userSnapshot.empty) {
       logRegister('Attempt to register with an existing username.', { hashedUsername });
       return res.status(400).json({ error: 'Username already exists.' });
     }
 
-    // Hash password and store user
-    const hashedPasswordWithSalt = await argon2.hash(hashedPassword);
+    // Store the user in Firestore
     await db.collection('users').add({
       username: hashedUsername,
-      password_hash: hashedPasswordWithSalt,
+      password_hash: hashedPassword, // Already hashed by the client
     });
 
     logRegister('User registered successfully.', { hashedUsername });

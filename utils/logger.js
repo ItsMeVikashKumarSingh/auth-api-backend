@@ -1,22 +1,24 @@
 const { MongoClient } = require('mongodb');
-const { DateTime } = require('luxon'); // For timezone conversion
+const { DateTime } = require('luxon');
 
-// MongoDB connection
-const MONGO_URI = process.env.MONGO_URI; // Add this in your Vercel environment variables
-const client = new MongoClient(MONGO_URI);
+// MongoDB connection string
+//const MONGO_URI = process.env.MONGO_URI; // Add this to your environment variables
 
-/**
- * Logs data to a specific MongoDB collection based on logType.
- * @param {string} logType - The type of log (e.g., "register", "login", "protected").
- * @param {string} message - The log message.
- * @param {object} [data] - Additional data for the log entry.
- */
+const MONGO_URI = "mongodb+srv://vikashbro111:Zvje8C31Sr2SkITq@logsdb.znxv1.mongodb.net/?retryWrites=true&w=majority&appName=logsDB"; // Add this to your environment variables
+
+// Create a new MongoClient instance
+const client = new MongoClient(MONGO_URI, { useNewUrlParser: true, useUnifiedTopology: true });
+
+// Logging function
 async function logToMongo(logType, message, data = {}) {
   try {
-    // Ensure MongoDB client is connected
-    if (!client.isConnected()) await client.connect();
-    const db = client.db('logsDB'); // Replace with your DB name
-    const logsCollection = db.collection(logType); // Use logType as the collection name
+    // Connect to MongoDB (if not already connected)
+    if (!client.topology || !client.topology.isConnected()) {
+      await client.connect();
+    }
+
+    const db = client.db('logsDB'); // Replace with your actual database name
+    const logsCollection = db.collection(logType); // Each logType gets its own collection
 
     // Convert timestamp to India Standard Time
     const timestamp = DateTime.now()
@@ -29,6 +31,7 @@ async function logToMongo(logType, message, data = {}) {
       message,
       data,
     });
+
     console.log(`[LOG] ${logType.toUpperCase()}: ${message}`);
   } catch (error) {
     console.error('Error logging to MongoDB:', error.message);

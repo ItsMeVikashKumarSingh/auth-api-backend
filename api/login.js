@@ -2,8 +2,8 @@ const db = require('../utils/firebaseAdmin');
 const argon2 = require('argon2');
 const jwt = require('jsonwebtoken');
 const crypto = require('crypto');
-const { cleanupExpiredSessions } = require('../utils/helpers');
 const { logLogin } = require('../utils/logger');
+const { cleanupExpiredSessions } = require('../utils/helpers');
 require('dotenv').config();
 
 const JWT_SECRET = process.env.JWT_SECRET;
@@ -21,8 +21,7 @@ module.exports = async (req, res) => {
 
   try {
     // Verify app signature
-    const isAppSignatureValid = await argon2.verify(HASHED_APP_SIGNATURE, hashedAppSignature);
-    if (!isAppSignatureValid) {
+    if (hashedAppSignature !== HASHED_APP_SIGNATURE) {
       logLogin('Unauthorized app attempt.', req.body);
       return res.status(403).json({ error: 'Unauthorized app.' });
     }
@@ -36,7 +35,7 @@ module.exports = async (req, res) => {
 
     const user = userSnapshot.docs[0].data();
 
-    // Verify password
+    // Verify hashed password using argon2
     const isPasswordValid = await argon2.verify(user.password_hash, hashedPassword);
     if (!isPasswordValid) {
       logLogin('Invalid credentials: Password mismatch.', { hashedUsername });
@@ -46,7 +45,7 @@ module.exports = async (req, res) => {
     // Cleanup expired sessions
     await cleanupExpiredSessions(hashedUsername);
 
-    // Extend or create session
+    // Generate a JWT token and create a session
     const expiryTimestamp = new Date();
     expiryTimestamp.setHours(expiryTimestamp.getHours() + 1);
     const sessionId = crypto.randomUUID();
