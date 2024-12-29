@@ -1,10 +1,10 @@
 const argon2 = require('argon2');
 const db = require('../utils/firebaseAdmin');
 const { logRegister } = require('../utils/logger');
-const { utils, ed25519 } = require('@noble/ed25519'); // For decryption
+const sodium = require('libsodium-wrappers');
 require('dotenv').config();
 
-const PRIVATE_KEY_HEX = process.env.PRIVATE_KEY_HEX; // Store as hex in .env
+const PRIVATE_KEY_HEX = process.env.PRIVATE_KEY_HEX; // Private key in hex format
 const HASHED_APP_SIGNATURE = process.env.HASHED_APP_SIGNATURE;
 
 module.exports = async (req, res) => {
@@ -16,6 +16,8 @@ module.exports = async (req, res) => {
   }
 
   try {
+    await sodium.ready;
+
     const { encryptedData } = req.body;
 
     if (!encryptedData) {
@@ -24,8 +26,11 @@ module.exports = async (req, res) => {
     }
 
     // Decrypt the encrypted message
-    const privateKeyBytes = utils.hexToBytes(PRIVATE_KEY_HEX);
-    const decryptedBytes = await ed25519.decrypt(encryptedData, privateKeyBytes);
+    const privateKey = Buffer.from(PRIVATE_KEY_HEX, 'hex');
+    const decryptedBytes = sodium.crypto_box_seal_open(
+      Buffer.from(encryptedData, 'base64'),
+      privateKey
+    );
     const decryptedData = JSON.parse(Buffer.from(decryptedBytes).toString());
 
     const { appSignature, username, password } = decryptedData;

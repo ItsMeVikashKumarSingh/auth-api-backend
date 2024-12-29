@@ -2,12 +2,12 @@ const argon2 = require('argon2');
 const jwt = require('jsonwebtoken');
 const db = require('../utils/firebaseAdmin');
 const { logLogin } = require('../utils/logger');
-const { cleanupExpiredSessions } = require('../utils/helpers');
-const { utils, ed25519 } = require('@noble/ed25519'); // For decryption
+const sodium = require('libsodium-wrappers');
 const crypto = require('crypto');
+const { cleanupExpiredSessions } = require('../utils/helpers');
 require('dotenv').config();
 
-const PRIVATE_KEY_HEX = process.env.PRIVATE_KEY_HEX; // Store as hex in .env
+const PRIVATE_KEY_HEX = process.env.PRIVATE_KEY_HEX; // Private key in hex format
 const HASHED_APP_SIGNATURE = process.env.HASHED_APP_SIGNATURE;
 const JWT_SECRET = process.env.JWT_SECRET;
 
@@ -20,6 +20,8 @@ module.exports = async (req, res) => {
   }
 
   try {
+    await sodium.ready;
+
     const { encryptedData } = req.body;
 
     if (!encryptedData) {
@@ -28,8 +30,11 @@ module.exports = async (req, res) => {
     }
 
     // Decrypt the encrypted message
-    const privateKeyBytes = utils.hexToBytes(PRIVATE_KEY_HEX);
-    const decryptedBytes = await ed25519.decrypt(encryptedData, privateKeyBytes);
+    const privateKey = Buffer.from(PRIVATE_KEY_HEX, 'hex');
+    const decryptedBytes = sodium.crypto_box_seal_open(
+      Buffer.from(encryptedData, 'base64'),
+      privateKey
+    );
     const decryptedData = JSON.parse(Buffer.from(decryptedBytes).toString());
 
     const { appSignature, username, password } = decryptedData;
@@ -56,8 +61,8 @@ module.exports = async (req, res) => {
       return res.status(401).json({ error: 'Invalid credentials.' });
     }
 
-      // Cleanup expired sessions
-    await cleanupExpiredSessions(hashedUsername);
+    // Cleanup expired sessions
+    await cleanupExpiredSessions(username);
 
     // Generate session token
     const sessionId = crypto.randomUUID();
