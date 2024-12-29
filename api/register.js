@@ -38,19 +38,16 @@ module.exports = async (req, res) => {
     // Convert PRIVATE_KEY_HEX to Uint8Array
     const privateKey = Uint8Array.from(Buffer.from(PRIVATE_KEY_HEX, 'hex'));
 
-    // Derive the public key from the private key
-    const publicKey = sodium.crypto_scalarmult_base(privateKey);
+    // Derive the keypair from the private key
+    const keyPair = sodium.crypto_box_seed_keypair(privateKey);
 
-    // Create the keypair object
-    const keyPair = { publicKey, privateKey };
-
-    // Ensure encrypted data is a Uint8Array
+    // Ensure encryptedData is a Uint8Array
     const sealedBox = Uint8Array.from(Buffer.from(encryptedData, 'base64'));
 
     // Decrypt the sealed box
-    const decryptedBytes = sodium.crypto_box_seal_open(sealedBox, keyPair);
+    const decryptedBytes = sodium.crypto_box_seal_open(sealedBox, keyPair.publicKey, keyPair.privateKey);
 
-    // Convert the decrypted bytes to a string and parse it as JSON
+    // Parse the decrypted data
     const decryptedData = JSON.parse(Buffer.from(decryptedBytes).toString());
 
     const { appSignature, username, password } = decryptedData;
