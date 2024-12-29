@@ -10,17 +10,19 @@ async function logToMongo(logType, message, data = {}) {
   console.log(`[DEBUG] Attempting to log to MongoDB - Type: ${logType}`);
 
   try {
-    // Connect to MongoDB if not connected
-    if (!client.topology || !client.topology.isConnected()) {
-      console.log('[DEBUG] Connecting to MongoDB...');
-      await client.connect();
-      console.log('[DEBUG] MongoDB connection established.');
+    // Check if MongoDB connection is already established
+    if (!client.isConnected()) {
+      console.log('[DEBUG] MongoDB client not connected. Attempting to connect...');
+      await client.connect(); // Connect if not already connected
+      console.log('[DEBUG] MongoDB connected.');
+    } else {
+      console.log('[DEBUG] MongoDB already connected.');
     }
 
     const db = client.db('logsDB'); // Replace with your database name
     const logsCollection = db.collection(logType); // Collection for the specific log type
 
-    // Convert timestamp to India Standard Time
+    // Convert timestamp to India Standard Time (IST)
     const timestamp = DateTime.now()
       .setZone('Asia/Kolkata')
       .toISO({ includeOffset: true }); // Format: 2024-12-25T17:30:00+05:30
@@ -41,5 +43,5 @@ async function logToMongo(logType, message, data = {}) {
 module.exports = {
   logRegister: (message, data) => logToMongo('register', message, data),
   logLogin: (message, data) => logToMongo('login', message, data),
-  logProtected: (message, data) => logToMongo('protected', message, data),
+  logProtected: (message, data) => logToMongo('protected', message, data),  // Specifically for 'protected' log type
 };
