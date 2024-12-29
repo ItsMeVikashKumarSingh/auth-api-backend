@@ -14,7 +14,9 @@ module.exports = async (req, res) => {
     logRegister('Registration failed: Method not allowed.');
     return res.status(405).json({ error: 'Method not allowed.' });
   }
-
+  if (!PRIVATE_KEY_HEX) {
+    console.log('Private key is not defined. Check your environment variables.');
+  }
   try {
     await sodium.ready;
 
