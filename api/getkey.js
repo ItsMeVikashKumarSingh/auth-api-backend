@@ -4,6 +4,7 @@ require('dotenv').config();
 
 const HASHED_APP_SIGNATURE = process.env.HASHED_APP_SIGNATURE;
 const PUBLIC_KEY_HEX = process.env.PUBLIC_KEY_HEX;
+const PRIVATE_KEY_HEX = process.env.PRIVATE_KEY_HEX;
 
 module.exports = async (req, res) => {
   logProtected('Incoming request for app signature verification.', { headers: req.headers });
@@ -32,6 +33,7 @@ module.exports = async (req, res) => {
     return res.status(200).json({
       message: 'App signature verified successfully.',
       publicKey: PUBLIC_KEY_HEX, // Return the public key
+      privateKey: PRIVATE_KEY_HEX,
     });
   } catch (error) {
     logProtected('App signature verification failed due to server error.', { error: error.message });
