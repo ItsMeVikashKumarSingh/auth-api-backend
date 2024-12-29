@@ -14,10 +14,18 @@ module.exports = async (req, res) => {
     logRegister('Registration failed: Method not allowed.');
     return res.status(405).json({ error: 'Method not allowed.' });
   }
-  if (!PRIVATE_KEY_HEX) {
-    console.log('Private key is not defined. Check your environment variables.');
-  }
+
   try {
+    if (!PRIVATE_KEY_HEX) {
+      console.error('PRIVATE_KEY_HEX is not defined. Check your environment variables.');
+      return res.status(500).json({ error: 'Server misconfiguration.', details: 'PRIVATE_KEY_HEX is missing.' });
+    }
+
+    if (!/^[0-9a-fA-F]+$/.test(PRIVATE_KEY_HEX)) {
+      console.error('PRIVATE_KEY_HEX is not a valid hexadecimal string.');
+      return res.status(500).json({ error: 'Server misconfiguration.', details: 'Invalid PRIVATE_KEY_HEX format.' });
+    }
+
     await sodium.ready;
 
     const { encryptedData } = req.body;
@@ -29,12 +37,13 @@ module.exports = async (req, res) => {
 
     // Decrypt the encrypted message
     const privateKey = Buffer.from(PRIVATE_KEY_HEX, 'hex');
+    const publicKey = sodium.crypto_scalarmult_base(privateKey);
     const decryptedBytes = sodium.crypto_box_seal_open(
       Buffer.from(encryptedData, 'base64'),
-      privateKey
+      { publicKey, privateKey }
     );
-    const decryptedData = JSON.parse(Buffer.from(decryptedBytes).toString());
 
+    const decryptedData = JSON.parse(Buffer.from(decryptedBytes).toString());
     const { appSignature, username, password } = decryptedData;
 
     // Verify the app signature
@@ -62,7 +71,8 @@ module.exports = async (req, res) => {
     logRegister('User registered successfully.', { username });
     return res.status(201).json({ message: 'User registered successfully.' });
   } catch (error) {
-    logRegister('Registration failed due to server error.', { error: error.message });
+    console.error('Error during registration:', error);
+    logRegister('Registration failed due to server error.', { error: error.message, stack: error.stack });
     return res.status(500).json({ error: 'Registration failed.', details: error.message });
   }
 };
