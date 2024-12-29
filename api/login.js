@@ -8,6 +8,7 @@ const { cleanupExpiredSessions } = require('../utils/helpers');
 require('dotenv').config();
 
 const PRIVATE_KEY_HEX = process.env.PRIVATE_KEY_HEX; // Private key in hex format
+const PUBLIC_KEY_HEX = process.env.PUBLIC_KEY_HEX;  // Public key in hex format
 const HASHED_APP_SIGNATURE = process.env.HASHED_APP_SIGNATURE;
 const JWT_SECRET = process.env.JWT_SECRET;
 
@@ -20,7 +21,19 @@ module.exports = async (req, res) => {
   }
 
   try {
-    await sodium.ready;
+    if (!PRIVATE_KEY_HEX || !PUBLIC_KEY_HEX) {
+      console.error('PRIVATE_KEY_HEX or PUBLIC_KEY_HEX is not defined. Check your environment variables.');
+      return res.status(500).json({
+        error: 'Server misconfiguration.',
+        details: 'PRIVATE_KEY_HEX or PUBLIC_KEY_HEX is missing.',
+      });
+    }
+
+    // Validate keys
+    if (!/^[0-9a-fA-F]{64}$/.test(PRIVATE_KEY_HEX) || !/^[0-9a-fA-F]{64}$/.test(PUBLIC_KEY_HEX)) {
+      console.error('PRIVATE_KEY_HEX or PUBLIC_KEY_HEX is not a valid 64-character hexadecimal string.');
+      return res.status(500).json({ error: 'Invalid key format.' });
+    }
 
     const { encryptedData } = req.body;
 
@@ -29,14 +42,26 @@ module.exports = async (req, res) => {
       return res.status(400).json({ error: 'Missing encrypted data.' });
     }
 
-    // Decrypt the encrypted message
-    const privateKey = Buffer.from(PRIVATE_KEY_HEX, 'hex');
-    const decryptedBytes = sodium.crypto_box_seal_open(
-      Buffer.from(encryptedData, 'base64'),
-      privateKey
-    );
-    const decryptedData = JSON.parse(Buffer.from(decryptedBytes).toString());
+    await sodium.ready;
 
+    // Convert keys from hex to Uint8Array
+    const privateKey = Uint8Array.from(Buffer.from(PRIVATE_KEY_HEX, 'hex'));
+    const publicKey = Uint8Array.from(Buffer.from(PUBLIC_KEY_HEX, 'hex'));
+
+    // Convert encryptedData from Base64 to Uint8Array
+    const sealedBox = Uint8Array.from(Buffer.from(encryptedData, 'base64'));
+
+    // Decrypt the sealed box using the provided public/private keypair
+    let decryptedBytes;
+    try {
+      decryptedBytes = sodium.crypto_box_seal_open(sealedBox, publicKey, privateKey);
+    } catch (error) {
+      console.error('Decryption failed:', error.message);
+      return res.status(400).json({ error: 'Decryption failed.', details: error.message });
+    }
+
+    // Parse the decrypted data
+    const decryptedData = JSON.parse(Buffer.from(decryptedBytes).toString());
     const { appSignature, username, password } = decryptedData;
 
     // Verify the app signature
@@ -85,6 +110,7 @@ module.exports = async (req, res) => {
     logLogin('Login successful.', { username, sessionId });
     return res.status(200).json({ message: 'Login successful.', token });
   } catch (error) {
+    console.error('Error during login:', error);
     logLogin('Login failed due to server error.', { error: error.message });
     return res.status(500).json({ error: 'Login failed.', details: error.message });
   }
