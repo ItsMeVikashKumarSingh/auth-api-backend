@@ -35,17 +35,24 @@ module.exports = async (req, res) => {
       return res.status(400).json({ error: 'Missing encrypted data.' });
     }
 
-    // Decrypt the encrypted message
+    // Convert PRIVATE_KEY_HEX to Uint8Array
     const privateKey = Uint8Array.from(Buffer.from(PRIVATE_KEY_HEX, 'hex'));
+
+    // Derive the public key from the private key
     const publicKey = sodium.crypto_scalarmult_base(privateKey);
+
+    // Create the keypair object
     const keyPair = { publicKey, privateKey };
 
-    const decryptedBytes = sodium.crypto_box_seal_open(
-      Uint8Array.from(Buffer.from(encryptedData, 'base64')),
-      keyPair
-    );
+    // Ensure encrypted data is a Uint8Array
+    const sealedBox = Uint8Array.from(Buffer.from(encryptedData, 'base64'));
 
+    // Decrypt the sealed box
+    const decryptedBytes = sodium.crypto_box_seal_open(sealedBox, keyPair);
+
+    // Convert the decrypted bytes to a string and parse it as JSON
     const decryptedData = JSON.parse(Buffer.from(decryptedBytes).toString());
+
     const { appSignature, username, password } = decryptedData;
 
     // Verify the app signature
