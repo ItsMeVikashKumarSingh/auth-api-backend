@@ -36,11 +36,13 @@ module.exports = async (req, res) => {
     }
 
     // Decrypt the encrypted message
-    const privateKey = Buffer.from(PRIVATE_KEY_HEX, 'hex');
+    const privateKey = Uint8Array.from(Buffer.from(PRIVATE_KEY_HEX, 'hex'));
     const publicKey = sodium.crypto_scalarmult_base(privateKey);
+    const keyPair = { publicKey, privateKey };
+
     const decryptedBytes = sodium.crypto_box_seal_open(
-      Buffer.from(encryptedData, 'base64'),
-      { publicKey, privateKey }
+      Uint8Array.from(Buffer.from(encryptedData, 'base64')),
+      keyPair
     );
 
     const decryptedData = JSON.parse(Buffer.from(decryptedBytes).toString());
