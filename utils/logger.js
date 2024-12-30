@@ -11,7 +11,7 @@ async function logToMongo(logType, message, data = {}) {
 
   try {
     // Check if MongoDB connection is already established
-    if (!client.isConnected()) {
+    if (!client.topology || !client.topology.isConnected()) {
       console.log('[DEBUG] MongoDB client not connected. Attempting to connect...');
       await client.connect(); // Connect if not already connected
       console.log('[DEBUG] MongoDB connected.');

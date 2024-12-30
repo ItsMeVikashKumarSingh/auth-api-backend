@@ -2,11 +2,19 @@ const argon2 = require('argon2');
 const db = require('../utils/firebaseAdmin');
 const { logRegister } = require('../utils/logger');
 const sodium = require('libsodium-wrappers');
+const { generateBackupCode } = require('../utils/generateBackupCode');
+const deterministicUsernameHash = require('../utils/deterministicUsernameHash');
+const { getActiveHashKey } = require('../utils/keyManager');
 require('dotenv').config();
 
-const PRIVATE_KEY_HEX = process.env.PRIVATE_KEY_HEX; // Private key in hex format
-const PUBLIC_KEY_HEX = process.env.PUBLIC_KEY_HEX;  // Public key in hex format
+const PRIVATE_KEY_HEX = process.env.PRIVATE_KEY_HEX;
+const PUBLIC_KEY_HEX = process.env.PUBLIC_KEY_HEX;
 const HASHED_APP_SIGNATURE = process.env.HASHED_APP_SIGNATURE;
+
+const DEFAULT_BIO = process.env.DEFAULT_BIO;
+const DEFAULT_NAME = process.env.DEFAULT_NAME;
+const DEFAULT_PROFILE_PIC = process.env.DEFAULT_PROFILE_PIC;
+const DEFAULT_ACCOUNT_STATUS = process.env.DEFAULT_ACCOUNT_STATUS;
 
 module.exports = async (req, res) => {
   logRegister('Incoming registration request.', { headers: req.headers });
@@ -17,20 +25,6 @@ module.exports = async (req, res) => {
   }
 
   try {
-    if (!PRIVATE_KEY_HEX || !PUBLIC_KEY_HEX) {
-      console.error('PRIVATE_KEY_HEX or PUBLIC_KEY_HEX is not defined. Check your environment variables.');
-      return res.status(500).json({
-        error: 'Server misconfiguration.',
-        details: 'PRIVATE_KEY_HEX or PUBLIC_KEY_HEX is missing.',
-      });
-    }
-
-    // Validate hex strings
-    if (!/^[0-9a-fA-F]{64}$/.test(PRIVATE_KEY_HEX) || !/^[0-9a-fA-F]{64}$/.test(PUBLIC_KEY_HEX)) {
-      console.error('PRIVATE_KEY_HEX or PUBLIC_KEY_HEX is not a valid 64-character hexadecimal string.');
-      return res.status(500).json({ error: 'Invalid key format.' });
-    }
-
     const { encryptedData } = req.body;
 
     if (!encryptedData) {
@@ -40,14 +34,10 @@ module.exports = async (req, res) => {
 
     await sodium.ready;
 
-    // Convert keys from hex to Uint8Array
     const privateKey = Uint8Array.from(Buffer.from(PRIVATE_KEY_HEX, 'hex'));
     const publicKey = Uint8Array.from(Buffer.from(PUBLIC_KEY_HEX, 'hex'));
-
-    // Convert encryptedData from Base64 to Uint8Array
     const sealedBox = Uint8Array.from(Buffer.from(encryptedData, 'base64'));
 
-    // Decrypt the sealed box using the provided public/private keypair
     let decryptedBytes;
     try {
       decryptedBytes = sodium.crypto_box_seal_open(sealedBox, publicKey, privateKey);
@@ -56,38 +46,67 @@ module.exports = async (req, res) => {
       return res.status(400).json({ error: 'Decryption failed.', details: error.message });
     }
 
-    // Parse the decrypted data
     const decryptedData = JSON.parse(Buffer.from(decryptedBytes).toString());
+    const { appSignature, username, password, clientPublicKey } = decryptedData;
 
-    const { appSignature, username, password } = decryptedData;
-
-    // Verify the app signature
     if (!appSignature || !(await argon2.verify(HASHED_APP_SIGNATURE, appSignature))) {
       logRegister('Registration failed: Unauthorized app.', { appSignature });
       return res.status(403).json({ error: 'Unauthorized app.' });
     }
 
-    // Check if the username exists
-    const userSnapshot = await db.collection('users').where('username', '==', username).get();
-    if (!userSnapshot.empty) {
+    const { key: hashKey, version: hashVersion } = getActiveHashKey();
+    const usernameHash = deterministicUsernameHash(username, hashKey);
+
+    const regUserSnapshot = await db.collection('reg_user').where('hashedUsername', '==', usernameHash).get();
+    if (!regUserSnapshot.empty) {
       logRegister('Registration failed: Username already exists.', { username });
       return res.status(400).json({ error: 'Username already exists.' });
     }
 
-    // Hash the password
+    const regUserRef = db.collection('reg_user');
+    const regUserCountSnapshot = await regUserRef.get();
+    const nextUUID = regUserCountSnapshot.size + 1;
+
     const passwordHash = await argon2.hash(password);
 
-    // Store the user in Firestore
-    await db.collection('users').add({
-      username,
-      password_hash: passwordHash,
-    });
+    const backupCode = generateBackupCode();
+    const backupCodeHash = deterministicUsernameHash(backupCode, hashKey);
 
-    logRegister('User registered successfully.', { username });
-    return res.status(201).json({ message: 'User registered successfully.' });
+    const userData = {
+      u_hash: usernameHash,
+      hash_ver: hashVersion,
+      p_hash: passwordHash,
+      b_code: backupCodeHash,
+      created_at: new Date().toISOString(),
+      last_login: null,
+      bio: DEFAULT_BIO,
+      name: DEFAULT_NAME,
+      p_pic: DEFAULT_PROFILE_PIC,
+      status: DEFAULT_ACCOUNT_STATUS,
+    };
+
+    await regUserRef.doc(String(nextUUID)).set({ hashedUsername: usernameHash });
+    await db.collection('users').doc(String(nextUUID)).set(userData);
+
+    const responseData = {
+      message: 'User registered successfully.',
+      backupCode,
+      uuid: nextUUID,
+    };
+
+    const clientPublicKeyBytes = Uint8Array.from(Buffer.from(clientPublicKey, 'hex'));
+    const encryptedResponse = sodium.crypto_box_seal(
+      Buffer.from(JSON.stringify(responseData)),
+      clientPublicKeyBytes
+    );
+
+    logRegister('User registered successfully.', { uuid: nextUUID });
+    return res.status(201).json({
+      encryptedData: Buffer.from(encryptedResponse).toString('base64'),
+    });
   } catch (error) {
     console.error('Error during registration:', error);
-    logRegister('Registration failed due to server error.', { error: error.message, stack: error.stack });
+    logRegister('Registration failed due to server error.', { error: error.message });
     return res.status(500).json({ error: 'Registration failed.', details: error.message });
   }
 };

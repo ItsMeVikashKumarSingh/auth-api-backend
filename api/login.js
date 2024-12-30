@@ -3,14 +3,15 @@ const jwt = require('jsonwebtoken');
 const db = require('../utils/firebaseAdmin');
 const { logLogin } = require('../utils/logger');
 const sodium = require('libsodium-wrappers');
-const crypto = require('crypto');
+const { getHashKey, getActiveJwtKey } = require('../utils/keyManager');
+const deterministicUsernameHash = require('../utils/deterministicUsernameHash');
 const { cleanupExpiredSessions } = require('../utils/helpers');
+const { DateTime } = require('luxon');
 require('dotenv').config();
 
-const PRIVATE_KEY_HEX = process.env.PRIVATE_KEY_HEX; // Private key in hex format
-const PUBLIC_KEY_HEX = process.env.PUBLIC_KEY_HEX;  // Public key in hex format
+const PRIVATE_KEY_HEX = process.env.PRIVATE_KEY_HEX;
+const PUBLIC_KEY_HEX = process.env.PUBLIC_KEY_HEX;
 const HASHED_APP_SIGNATURE = process.env.HASHED_APP_SIGNATURE;
-const JWT_SECRET = process.env.JWT_SECRET;
 
 module.exports = async (req, res) => {
   logLogin('Incoming login request.', { headers: req.headers });
@@ -21,20 +22,6 @@ module.exports = async (req, res) => {
   }
 
   try {
-    if (!PRIVATE_KEY_HEX || !PUBLIC_KEY_HEX) {
-      console.error('PRIVATE_KEY_HEX or PUBLIC_KEY_HEX is not defined. Check your environment variables.');
-      return res.status(500).json({
-        error: 'Server misconfiguration.',
-        details: 'PRIVATE_KEY_HEX or PUBLIC_KEY_HEX is missing.',
-      });
-    }
-
-    // Validate keys
-    if (!/^[0-9a-fA-F]{64}$/.test(PRIVATE_KEY_HEX) || !/^[0-9a-fA-F]{64}$/.test(PUBLIC_KEY_HEX)) {
-      console.error('PRIVATE_KEY_HEX or PUBLIC_KEY_HEX is not a valid 64-character hexadecimal string.');
-      return res.status(500).json({ error: 'Invalid key format.' });
-    }
-
     const { encryptedData } = req.body;
 
     if (!encryptedData) {
@@ -44,14 +31,10 @@ module.exports = async (req, res) => {
 
     await sodium.ready;
 
-    // Convert keys from hex to Uint8Array
     const privateKey = Uint8Array.from(Buffer.from(PRIVATE_KEY_HEX, 'hex'));
     const publicKey = Uint8Array.from(Buffer.from(PUBLIC_KEY_HEX, 'hex'));
-
-    // Convert encryptedData from Base64 to Uint8Array
     const sealedBox = Uint8Array.from(Buffer.from(encryptedData, 'base64'));
 
-    // Decrypt the sealed box using the provided public/private keypair
     let decryptedBytes;
     try {
       decryptedBytes = sodium.crypto_box_seal_open(sealedBox, publicKey, privateKey);
@@ -60,55 +43,78 @@ module.exports = async (req, res) => {
       return res.status(400).json({ error: 'Decryption failed.', details: error.message });
     }
 
-    // Parse the decrypted data
     const decryptedData = JSON.parse(Buffer.from(decryptedBytes).toString());
-    const { appSignature, username, password } = decryptedData;
+    const { appSignature, username, password, clientPublicKey } = decryptedData;
 
-    // Verify the app signature
     if (!appSignature || !(await argon2.verify(HASHED_APP_SIGNATURE, appSignature))) {
       logLogin('Login failed: Unauthorized app.', { appSignature });
       return res.status(403).json({ error: 'Unauthorized app.' });
     }
 
-    // Fetch user by username
-    const userSnapshot = await db.collection('users').where('username', '==', username).get();
-    if (userSnapshot.empty) {
+    const regUserSnapshot = await db.collection('reg_user').where('hashedUsername', '==', username).get();
+    if (regUserSnapshot.empty) {
       logLogin('Login failed: Invalid username.', { username });
       return res.status(401).json({ error: 'Invalid credentials.' });
     }
 
-    const user = userSnapshot.docs[0].data();
+    const userUUID = regUserSnapshot.docs[0].id;
 
-    // Verify password
-    const isPasswordValid = await argon2.verify(user.password_hash, password);
-    if (!isPasswordValid) {
+    const userDoc = await db.collection('users').doc(userUUID).get();
+    if (!userDoc.exists) {
+      logLogin('Login failed: User data missing.', { username });
+      return res.status(500).json({ error: 'User data missing.' });
+    }
+
+    const userData = userDoc.data();
+    const usernameHashKey = getHashKey(userData.hash_ver);
+    const usernameHash = deterministicUsernameHash(username, usernameHashKey);
+
+    if (usernameHash !== userData.u_hash) {
+      logLogin('Login failed: Username hash mismatch.', { username });
+      return res.status(401).json({ error: 'Invalid credentials.' });
+    }
+
+    if (!(await argon2.verify(userData.p_hash, password))) {
       logLogin('Login failed: Invalid password.', { username });
       return res.status(401).json({ error: 'Invalid credentials.' });
     }
 
     // Cleanup expired sessions
-    await cleanupExpiredSessions(username);
+    await cleanupExpiredSessions(userUUID);
 
-    // Generate session token
-    const sessionId = crypto.randomUUID();
-    const expiryTimestamp = new Date();
-    expiryTimestamp.setHours(expiryTimestamp.getHours() + 1);
+    // Generate new session
+    const { key: jwtKey, version: jwtVersion } = getActiveJwtKey();
+    const token = jwt.sign({ uuid: userUUID, keyVersion: jwtVersion }, jwtKey, { expiresIn: '1h' });
 
-    const token = jwt.sign({ username }, JWT_SECRET, { expiresIn: '1h' });
+    const expiryTimestamp = DateTime.now().setZone('Asia/Kolkata').plus({ hours: 1 }).toISO();
 
-    // Store session in Firestore
-    await db.collection('sessions').doc(username).set(
+    await db.collection('sessions').doc(userUUID).set(
       {
-        [sessionId]: {
+        [userUUID]: {
           token,
-          expires_at: expiryTimestamp.toISOString(),
+          expires_at: expiryTimestamp,
+          jwt_version: jwtVersion,
         },
       },
       { merge: true }
     );
 
-    logLogin('Login successful.', { username, sessionId });
-    return res.status(200).json({ message: 'Login successful.', token });
+    const responseData = {
+      message: 'Login successful.',
+      token,
+      expires_at: expiryTimestamp,
+    };
+
+    const clientPublicKeyBytes = Uint8Array.from(Buffer.from(clientPublicKey, 'hex'));
+    const encryptedResponse = sodium.crypto_box_seal(
+      Buffer.from(JSON.stringify(responseData)),
+      clientPublicKeyBytes
+    );
+
+    logLogin('Login successful.', { uuid: userUUID });
+    return res.status(200).json({
+      encryptedData: Buffer.from(encryptedResponse).toString('base64'),
+    });
   } catch (error) {
     console.error('Error during login:', error);
     logLogin('Login failed due to server error.', { error: error.message });
