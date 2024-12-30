@@ -51,31 +51,43 @@ module.exports = async (req, res) => {
       return res.status(403).json({ error: 'Unauthorized app.' });
     }
 
-    const userData = userDoc.data();
-    const usernameHashKey = getHashKey(userData.hash_ver);
-    const usernameHash = deterministicUsernameHash(username, usernameHashKey);
-    
-    const regUserSnapshot = await db.collection('reg_user').where('hashedUsername', '==', usernamehash).get();
-    if (regUserSnapshot.empty) {
+    // Iterative username hash matching
+    const hashKeys = JSON.parse(process.env.USERNAME_HASH_KEYS_VERSIONS || '{}');
+    let userUUID = null;
+    let matchedHashVersion = null;
+
+    for (const [version, hashKey] of Object.entries(hashKeys)) {
+      const hashedUsername = deterministicUsernameHash(username, hashKey);
+
+      const regUserSnapshot = await db
+        .collection('reg_user')
+        .where('hashedUsername', '==', hashedUsername)
+        .get();
+
+      if (!regUserSnapshot.empty) {
+        userUUID = regUserSnapshot.docs[0].id;
+        matchedHashVersion = version;
+        break;
+      }
+    }
+
+    if (!userUUID) {
       logLogin('Login failed: Invalid username.', { username });
       return res.status(401).json({ error: 'Invalid credentials.' });
     }
 
-    const userUUID = regUserSnapshot.docs[0].id;
-
+    // Fetch user data
     const userDoc = await db.collection('users').doc(userUUID).get();
     if (!userDoc.exists) {
-      logLogin('Login failed: User data missing.', { username });
+      logLogin('Login failed: User data missing.', { uuid: userUUID });
       return res.status(500).json({ error: 'User data missing.' });
     }
 
-    if (usernameHash !== userData.u_hash) {
-      logLogin('Login failed: Username hash mismatch.', { username });
-      return res.status(401).json({ error: 'Invalid credentials.' });
-    }
+    const userData = userDoc.data();
 
+    // Verify password
     if (!(await argon2.verify(userData.p_hash, password))) {
-      logLogin('Login failed: Invalid password.', { username });
+      logLogin('Login failed: Invalid password.', { uuid: userUUID });
       return res.status(401).json({ error: 'Invalid credentials.' });
     }
 
