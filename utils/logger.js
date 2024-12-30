@@ -43,5 +43,6 @@ async function logToMongo(logType, message, data = {}) {
 module.exports = {
   logRegister: (message, data) => logToMongo('register', message, data),
   logLogin: (message, data) => logToMongo('login', message, data),
+  logForgotPassword: (message, data) => logToMongo('ForgotPassword', message, data),
   logProtected: (message, data) => logToMongo('protected', message, data),  // Specifically for 'protected' log type
 };

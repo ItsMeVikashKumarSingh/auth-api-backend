@@ -27,7 +27,7 @@
       "src": "/api/getkey",
       "dest": "api/getkey.js"
     },
-     {
+    {
       "src": "/api/forgotpassword",
       "dest": "api/forgotPassword.js"
     }

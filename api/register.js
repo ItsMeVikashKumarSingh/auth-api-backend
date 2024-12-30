@@ -4,7 +4,8 @@ const { logRegister } = require('../utils/logger');
 const sodium = require('libsodium-wrappers');
 const { generateBackupCode } = require('../utils/generateBackupCode');
 const deterministicUsernameHash = require('../utils/deterministicUsernameHash');
-const { getActiveHashKey } = require('../utils/keyManager');
+const { getActiveHashKey, getHashKey } = require('../utils/keyManager');
+const { DateTime } = require('luxon');
 require('dotenv').config();
 
 const PRIVATE_KEY_HEX = process.env.PRIVATE_KEY_HEX;
@@ -54,30 +55,51 @@ module.exports = async (req, res) => {
       return res.status(403).json({ error: 'Unauthorized app.' });
     }
 
-    const { key: hashKey, version: hashVersion } = getActiveHashKey();
-    const usernameHash = deterministicUsernameHash(username, hashKey);
+    // Fetch all reg_user documents once
+    const regUserSnapshot = await db.collection('reg_user').get();
+    const regUsers = regUserSnapshot.docs.map(doc => ({
+      uuid: doc.id,
+      hashedUsername: doc.data().hashedUsername,
+      hashVersion: doc.data().hashVersion,
+    }));
 
-    const regUserSnapshot = await db.collection('reg_user').where('hashedUsername', '==', usernameHash).get();
-    if (!regUserSnapshot.empty) {
-      logRegister('Registration failed: Username already exists.', { username });
-      return res.status(400).json({ error: 'Username already exists.' });
+    // Check if the username exists with any hash version
+    const hashKeys = JSON.parse(process.env.USERNAME_HASH_KEYS_VERSIONS || '{}');
+    for (const [version, hashKey] of Object.entries(hashKeys)) {
+      const hashedUsername = deterministicUsernameHash(username, hashKey);
+
+      if (regUsers.some(user => user.hashedUsername === hashedUsername && user.hashVersion === version)) {
+        logRegister('Registration failed: Username already exists.', { username });
+        return res.status(400).json({ error: 'Username already exists.' });
+      }
     }
 
-    const regUserRef = db.collection('reg_user');
-    const regUserCountSnapshot = await regUserRef.get();
-    const nextUUID = regUserCountSnapshot.size + 1;
+    // Fetch the current `total` (last UUID assigned) from `reg_user`
+    const totalDoc = await db.collection('reg_user').doc('total').get();
+    let nextUUID = 1;
 
+    if (totalDoc.exists) {
+      nextUUID = totalDoc.data().lastUUID + 1;
+    }
+
+    // Hash the username with the active hash key
+    const { key: activeHashKey, version: activeHashVersion } = getActiveHashKey();
+    const usernameHash = deterministicUsernameHash(username, activeHashKey);
+
+    // Hash the password and generate backup code
     const passwordHash = await argon2.hash(password);
-
     const backupCode = generateBackupCode();
-    const backupCodeHash = deterministicUsernameHash(backupCode, hashKey);
+    const backupCodeHash = deterministicUsernameHash(backupCode, activeHashKey);
 
+    const currentTimestamp = DateTime.now().setZone('Asia/Kolkata').toISO();
+
+    // Store user data in Firestore
     const userData = {
       u_hash: usernameHash,
-      hash_ver: hashVersion,
+      hash_ver: activeHashVersion,
       p_hash: passwordHash,
       b_code: backupCodeHash,
-      created_at: new Date().toISOString(),
+      created_at: currentTimestamp,
       last_login: null,
       bio: DEFAULT_BIO,
       name: DEFAULT_NAME,
@@ -85,8 +107,14 @@ module.exports = async (req, res) => {
       status: DEFAULT_ACCOUNT_STATUS,
     };
 
-    await regUserRef.doc(String(nextUUID)).set({ hashedUsername: usernameHash });
+    await db.collection('reg_user').doc(String(nextUUID)).set({
+      hashedUsername: usernameHash,
+      hashVersion: activeHashVersion,
+    });
     await db.collection('users').doc(String(nextUUID)).set(userData);
+
+    // Update the `total` document in `reg_user` with the new last UUID
+    await db.collection('reg_user').doc('total').set({ lastUUID: nextUUID });
 
     const responseData = {
       message: 'User registered successfully.',

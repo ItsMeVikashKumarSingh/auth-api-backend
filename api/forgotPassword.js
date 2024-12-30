@@ -49,23 +49,43 @@ module.exports = async (req, res) => {
       return res.status(403).json({ error: 'Unauthorized app.' });
     }
 
-    const backupCodeHash = deterministicUsernameHash(backupCode, getHashKey('v1'));
+    // Fetch all `users` documents to validate backup code
+    const usersSnapshot = await db.collection('users').get();
+    const users = usersSnapshot.docs.map(doc => ({
+      uuid: doc.id,
+      hashedBackupCode: doc.data().b_code,
+      hashVersion: doc.data().hash_ver,
+    }));
 
-    const userSnapshot = await db.collection('users').where('b_code', '==', backupCodeHash).get();
-    if (userSnapshot.empty) {
+    let userUUID = null;
+    const hashKeys = JSON.parse(process.env.USERNAME_HASH_KEYS_VERSIONS || '{}');
+
+    // Check if the backup code matches any user
+    for (const [version, hashKey] of Object.entries(hashKeys)) {
+      const backupCodeHash = deterministicUsernameHash(backupCode, hashKey);
+
+      const matchedUser = users.find(
+        user => user.hashedBackupCode === backupCodeHash && user.hashVersion === version
+      );
+
+      if (matchedUser) {
+        userUUID = matchedUser.uuid;
+        break;
+      }
+    }
+
+    if (!userUUID) {
       logForgotPassword('Forgot password failed: Invalid backup code.');
       return res.status(401).json({ error: 'Invalid backup code.' });
     }
 
-    const userUUID = userSnapshot.docs[0].id;
-    const userData = userSnapshot.docs[0].data();
     const updates = {};
 
     if (newUsername) {
-      const { key: newHashKey, version: newHashVersion } = getActiveHashKey();
-      const newUsernameHash = deterministicUsernameHash(newUsername, newHashKey);
+      const { key: activeHashKey, version: activeHashVersion } = getActiveHashKey();
+      const newUsernameHash = deterministicUsernameHash(newUsername, activeHashKey);
       updates.u_hash = newUsernameHash;
-      updates.hash_ver = newHashVersion;
+      updates.hash_ver = activeHashVersion;
     }
 
     if (newPassword) {
@@ -73,7 +93,8 @@ module.exports = async (req, res) => {
     }
 
     const newBackupCode = generateBackupCode();
-    updates.b_code = deterministicUsernameHash(newBackupCode, getHashKey(userData.hash_ver));
+    const activeHashKey = getActiveHashKey().key;
+    updates.b_code = deterministicUsernameHash(newBackupCode, activeHashKey);
 
     await db.collection('users').doc(userUUID).update(updates);
 
