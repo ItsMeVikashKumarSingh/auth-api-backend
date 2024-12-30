@@ -7,6 +7,7 @@ const { getHashKey, getActiveJwtKey } = require('../utils/keyManager');
 const deterministicUsernameHash = require('../utils/deterministicUsernameHash');
 const { cleanupExpiredSessions } = require('../utils/helpers');
 const { DateTime } = require('luxon');
+const crypto = require('crypto');
 require('dotenv').config();
 
 const PRIVATE_KEY_HEX = process.env.PRIVATE_KEY_HEX;
@@ -94,25 +95,35 @@ module.exports = async (req, res) => {
       return res.status(401).json({ error: 'Invalid credentials.' });
     }
 
+    // Update last login
+    const currentTimestamp = DateTime.now().setZone('Asia/Kolkata').toISO();
+    await db.collection('users').doc(userUUID).update({ last_login: currentTimestamp });
+
     // Cleanup expired sessions
     await cleanupExpiredSessions(userUUID);
 
     // Generate new session
+    const sessionId = crypto.randomUUID();
     const { key: jwtKey, version: jwtVersion } = getActiveJwtKey();
-    const token = jwt.sign({ uuid: userUUID, keyVersion: jwtVersion }, jwtKey, { expiresIn: '1h' });
+    const token = jwt.sign(
+      { uuid: userUUID, sessionId, keyVersion: jwtVersion },
+      jwtKey,
+      { expiresIn: '1h' }
+    );
 
     const expiryTimestamp = DateTime.now().setZone('Asia/Kolkata').plus({ hours: 1 }).toISO();
 
-    await db.collection('sessions').doc(userUUID).set(
-      {
-        [userUUID]: {
-          token,
-          expires_at: expiryTimestamp,
-          jwt_version: jwtVersion,
-        },
-      },
-      { merge: true }
-    );
+    const sessionsRef = db.collection('sessions').doc(userUUID);
+    const sessionsDoc = await sessionsRef.get();
+
+    const updatedSessions = sessionsDoc.exists ? sessionsDoc.data() : {};
+    updatedSessions[sessionId] = {
+      token,
+      expires_at: expiryTimestamp,
+      jwt_version: jwtVersion,
+    };
+
+    await sessionsRef.set(updatedSessions);
 
     const responseData = {
       message: 'Login successful.',
@@ -126,7 +137,7 @@ module.exports = async (req, res) => {
       clientPublicKeyBytes
     );
 
-    logLogin('Login successful.', { uuid: userUUID });
+    logLogin('Login successful.', { uuid: userUUID, sessionId });
     return res.status(200).json({
       encryptedData: Buffer.from(encryptedResponse).toString('base64'),
     });

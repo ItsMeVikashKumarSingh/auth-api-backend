@@ -1,4 +1,3 @@
-const argon2 = require('argon2');
 const db = require('./firebaseAdmin');
 
 // Verify Argon2 hash
@@ -7,8 +6,8 @@ async function verifyHash(data, hash) {
 }
 
 // Cleanup expired sessions
-async function cleanupExpiredSessions(hashedUsername) {
-  const sessionsRef = db.collection('sessions').doc(hashedUsername);
+async function cleanupExpiredSessions(uuid) {
+  const sessionsRef = db.collection('sessions').doc(uuid);
   const sessionsDoc = await sessionsRef.get();
 
   if (sessionsDoc.exists) {
