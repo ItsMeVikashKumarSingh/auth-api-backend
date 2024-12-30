@@ -51,21 +51,24 @@ module.exports = async (req, res) => {
       return res.status(403).json({ error: 'Unauthorized app.' });
     }
 
-    // Iterative username hash matching
+    // Fetch all reg_user records once to reduce query overhead
+    const regUserSnapshot = await db.collection('reg_user').get();
+    const regUsers = regUserSnapshot.docs.map(doc => ({
+      uuid: doc.id,
+      hashedUsername: doc.data().hashedUsername,
+    }));
+
+    // Match username hash iteratively
     const hashKeys = JSON.parse(process.env.USERNAME_HASH_KEYS_VERSIONS || '{}');
     let userUUID = null;
     let matchedHashVersion = null;
 
     for (const [version, hashKey] of Object.entries(hashKeys)) {
       const hashedUsername = deterministicUsernameHash(username, hashKey);
+      const matchedUser = regUsers.find(user => user.hashedUsername === hashedUsername);
 
-      const regUserSnapshot = await db
-        .collection('reg_user')
-        .where('hashedUsername', '==', hashedUsername)
-        .get();
-
-      if (!regUserSnapshot.empty) {
-        userUUID = regUserSnapshot.docs[0].id;
+      if (matchedUser) {
+        userUUID = matchedUser.uuid;
         matchedHashVersion = version;
         break;
       }
@@ -76,7 +79,7 @@ module.exports = async (req, res) => {
       return res.status(401).json({ error: 'Invalid credentials.' });
     }
 
-    // Fetch user data
+    // Fetch user data using UUID
     const userDoc = await db.collection('users').doc(userUUID).get();
     if (!userDoc.exists) {
       logLogin('Login failed: User data missing.', { uuid: userUUID });
