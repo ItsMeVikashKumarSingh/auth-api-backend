@@ -51,7 +51,11 @@ module.exports = async (req, res) => {
       return res.status(403).json({ error: 'Unauthorized app.' });
     }
 
-    const regUserSnapshot = await db.collection('reg_user').where('hashedUsername', '==', username).get();
+    const userData = userDoc.data();
+    const usernameHashKey = getHashKey(userData.hash_ver);
+    const usernameHash = deterministicUsernameHash(username, usernameHashKey);
+    
+    const regUserSnapshot = await db.collection('reg_user').where('hashedUsername', '==', usernamehash).get();
     if (regUserSnapshot.empty) {
       logLogin('Login failed: Invalid username.', { username });
       return res.status(401).json({ error: 'Invalid credentials.' });
@@ -64,10 +68,6 @@ module.exports = async (req, res) => {
       logLogin('Login failed: User data missing.', { username });
       return res.status(500).json({ error: 'User data missing.' });
     }
-
-    const userData = userDoc.data();
-    const usernameHashKey = getHashKey(userData.hash_ver);
-    const usernameHash = deterministicUsernameHash(username, usernameHashKey);
 
     if (usernameHash !== userData.u_hash) {
       logLogin('Login failed: Username hash mismatch.', { username });
