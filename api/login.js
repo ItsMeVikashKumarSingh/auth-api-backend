@@ -12,7 +12,7 @@ require('dotenv').config();
 
 const PRIVATE_KEY_HEX = process.env.PRIVATE_KEY_HEX;
 const PUBLIC_KEY_HEX = process.env.PUBLIC_KEY_HEX;
-const HASHED_APP_SIGNATURE = process.env.HASHED_APP_SIGNATURE;
+const APP_SIGNATURE = process.env.APP_SIGNATURE;
 
 module.exports = async (req, res) => {
   logLogin('Incoming login request.', { headers: req.headers });
@@ -47,30 +47,84 @@ module.exports = async (req, res) => {
     const decryptedData = JSON.parse(Buffer.from(decryptedBytes).toString());
     const { appSignature, username, password, clientPublicKey } = decryptedData;
 
-    if (!appSignature || !(await argon2.verify(HASHED_APP_SIGNATURE, appSignature))) {
+    // Match plain text appSignature
+    if (appSignature !== APP_SIGNATURE) {
       logLogin('Login failed: Unauthorized app.', { appSignature });
-      return res.status(403).json({ error: 'Unauthorized app.' });
-    }
 
-    // Fetch all reg_user records once to reduce query overhead
-    const regUserSnapshot = await db.collection('reg_user').get();
-    const regUsers = regUserSnapshot.docs.map(doc => ({
-      uuid: doc.id,
-      hashedUsername: doc.data().hashedUsername,
-    }));
+      const regUserSnapshot = await db
+        .collection('reg_user')
+        .where('hashedUsername', '==', deterministicUsernameHash(username, getHashKey('v1')))
+        .get();
+
+      if (regUserSnapshot.empty) {
+        return res.status(403).json({ error: 'Unauthorized app.' });
+      }
+
+      const regUserDoc = regUserSnapshot.docs[0];
+      const regUserData = regUserDoc.data();
+      const currentTime = DateTime.now().setZone('Asia/Kolkata');
+      let { warnings = 0, attempts = 0, lastAttemptTime } = regUserData;
+
+      lastAttemptTime = lastAttemptTime ? DateTime.fromISO(lastAttemptTime) : currentTime.minus({ minutes: 31 });
+
+      // Check if last attempt was more than 30 minutes ago
+      if (currentTime.diff(lastAttemptTime, 'minutes').minutes > 30) {
+        attempts = 1; // Reset attempts if more than 30 minutes have passed
+      } else {
+        attempts += 1; // Increment attempts
+      }
+
+      if (attempts >= 3) {
+        const retryAfter = currentTime.plus({ minutes: 30 }).toFormat('hh:mm a');
+        await regUserDoc.ref.update({
+          lastAttemptTime: currentTime.toISO(),
+          attempts,
+        });
+        return res.status(429).json({
+          error: `Too many attempts. Please try again after ${retryAfter} IST.`,
+        });
+      }
+
+      warnings += 1;
+
+      if (warnings >= 5) {
+        await regUserDoc.ref.update({
+          accountStatus: 'banned',
+          warnings,
+          attempts,
+          lastAttemptTime: currentTime.toISO(),
+        });
+        return res.status(403).json({ error: 'Account has been banned due to repeated invalid attempts.' });
+      }
+
+      await regUserDoc.ref.update({
+        warnings,
+        attempts,
+        lastAttemptTime: currentTime.toISO(),
+      });
+
+      return res.status(403).json({
+        error: 'Unauthorized app.',
+        warnings,
+        attempts,
+      });
+    }
 
     // Match username hash iteratively
     const hashKeys = JSON.parse(process.env.USERNAME_HASH_KEYS_VERSIONS || '{}');
     let userUUID = null;
-    let matchedHashVersion = null;
 
     for (const [version, hashKey] of Object.entries(hashKeys)) {
-      const hashedUsername = deterministicUsernameHash(username, hashKey);
-      const matchedUser = regUsers.find(user => user.hashedUsername === hashedUsername);
+      const usernameHash = deterministicUsernameHash(username, hashKey);
 
-      if (matchedUser) {
-        userUUID = matchedUser.uuid;
-        matchedHashVersion = version;
+      const regUserSnapshot = await db
+        .collection('reg_user')
+        .where('hashedUsername', '==', usernameHash)
+        .where('hashVersion', '==', version)
+        .get();
+
+      if (!regUserSnapshot.empty) {
+        userUUID = regUserSnapshot.docs[0].id;
         break;
       }
     }
@@ -81,7 +135,9 @@ module.exports = async (req, res) => {
     }
 
     // Fetch user data using UUID
-    const userDoc = await db.collection('users').doc(userUUID).get();
+    const userDocRef = db.collection('users').doc(userUUID);
+    const userDoc = await userDocRef.get();
+
     if (!userDoc.exists) {
       logLogin('Login failed: User data missing.', { uuid: userUUID });
       return res.status(500).json({ error: 'User data missing.' });
@@ -95,9 +151,12 @@ module.exports = async (req, res) => {
       return res.status(401).json({ error: 'Invalid credentials.' });
     }
 
+    // Reset attempts and warnings on successful login
+    await userDocRef.update({ warnings: 0, attempts: 0 });
+
     // Update last login
     const currentTimestamp = DateTime.now().setZone('Asia/Kolkata').toISO();
-    await db.collection('users').doc(userUUID).update({ last_login: currentTimestamp });
+    await userDocRef.update({ last_login: currentTimestamp });
 
     // Cleanup expired sessions
     await cleanupExpiredSessions(userUUID);
