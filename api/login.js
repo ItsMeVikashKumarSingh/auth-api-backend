@@ -71,7 +71,7 @@ if (appSignature !== APP_SIGNATURE) {
   }
 
   if (!userUUID) {
-    return res.status(401).json({ error: 'Invalid username or unauthorized app.' });
+    return res.status(401).json({ error: 'Invalid username.' });
   }
 
   // Fetch user document
@@ -83,6 +83,12 @@ if (appSignature !== APP_SIGNATURE) {
   }
 
   const userData = userDoc.data();
+
+  // Check if account is already banned
+  if (userData.status === 'banned') {
+    logLogin('Login failed: Account is banned.', { uuid: userUUID });
+    return res.status(403).json({ error: 'You are banned.' });
+  }
 
   const currentTime = DateTime.now().setZone('Asia/Kolkata');
   const lastAttemptTime = userData.lastAttemptTime ? DateTime.fromISO(userData.lastAttemptTime) : null;
@@ -113,12 +119,9 @@ if (appSignature !== APP_SIGNATURE) {
   if (warnings >= 5) {
     await userDocRef.update({
       status: 'banned',
-      warnings,
-      attempts,
-      lastAttemptTime: currentTime.toISO(),
     });
-    logLogin('Login failed: Account banned due to repeated invalid attempts.', { uuid: userUUID });
-    return res.status(403).json({ error: 'Account has been banned due to repeated invalid attempts.' });
+    logLogin('Login failed: Account is banned.', { uuid: userUUID });
+    return res.status(403).json({ error: 'You are banned.' });
   }
 
   // Update user document with new attempts, warnings, and last attempt time
@@ -134,7 +137,7 @@ if (appSignature !== APP_SIGNATURE) {
 
 
     // Reset warnings and attempts on successful login
-    await userDocRef.update({ warnings: 0, attempts: 0 });
+    await userDocRef.update({attempts: 0 });
 
     // Update last login
     const currentTimestamp = currentTime.toISO();
