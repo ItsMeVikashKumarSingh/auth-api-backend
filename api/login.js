@@ -50,64 +50,7 @@ module.exports = async (req, res) => {
     // Match plain text appSignature
     if (appSignature !== APP_SIGNATURE) {
       logLogin('Login failed: Unauthorized app.', { appSignature });
-
-      const regUserSnapshot = await db
-        .collection('reg_user')
-        .where('hashedUsername', '==', deterministicUsernameHash(username, getHashKey('v1')))
-        .get();
-
-      if (regUserSnapshot.empty) {
-        return res.status(403).json({ error: 'Unauthorized app.' });
-      }
-
-      const regUserDoc = regUserSnapshot.docs[0];
-      const regUserData = regUserDoc.data();
-      const currentTime = DateTime.now().setZone('Asia/Kolkata');
-      let { warnings = 0, attempts = 0, lastAttemptTime } = regUserData;
-
-      lastAttemptTime = lastAttemptTime ? DateTime.fromISO(lastAttemptTime) : currentTime.minus({ minutes: 31 });
-
-      // Check if last attempt was more than 30 minutes ago
-      if (currentTime.diff(lastAttemptTime, 'minutes').minutes > 30) {
-        attempts = 1; // Reset attempts if more than 30 minutes have passed
-      } else {
-        attempts += 1; // Increment attempts
-      }
-
-      if (attempts >= 3) {
-        const retryAfter = currentTime.plus({ minutes: 30 }).toFormat('hh:mm a');
-        await regUserDoc.ref.update({
-          lastAttemptTime: currentTime.toISO(),
-          attempts,
-        });
-        return res.status(429).json({
-          error: `Too many attempts. Please try again after ${retryAfter} IST.`,
-        });
-      }
-
-      warnings += 1;
-
-      if (warnings >= 5) {
-        await regUserDoc.ref.update({
-          accountStatus: 'banned',
-          warnings,
-          attempts,
-          lastAttemptTime: currentTime.toISO(),
-        });
-        return res.status(403).json({ error: 'Account has been banned due to repeated invalid attempts.' });
-      }
-
-      await regUserDoc.ref.update({
-        warnings,
-        attempts,
-        lastAttemptTime: currentTime.toISO(),
-      });
-
-      return res.status(403).json({
-        error: 'Unauthorized app.',
-        warnings,
-        attempts,
-      });
+      return res.status(403).json({ error: 'Unauthorized app.' });
     }
 
     // Match username hash iteratively
@@ -145,17 +88,67 @@ module.exports = async (req, res) => {
 
     const userData = userDoc.data();
 
-    // Verify password
-    if (!(await argon2.verify(userData.p_hash, password))) {
-      logLogin('Login failed: Invalid password.', { uuid: userUUID });
-      return res.status(401).json({ error: 'Invalid credentials.' });
+    // Check account status
+    if (userData.status !== 'active') {
+      logLogin('Login failed: Account is inactive or banned.', { uuid: userUUID });
+      return res.status(403).json({ error: 'Account is inactive or banned.' });
     }
 
-    // Reset attempts and warnings on successful login
+    const currentTime = DateTime.now().setZone('Asia/Kolkata');
+    const lastAttemptTime = userData.lastAttemptTime ? DateTime.fromISO(userData.lastAttemptTime) : null;
+    const attempts = userData.attempts || 0;
+    let warnings = userData.warnings || 0;
+
+    // Handle login attempts
+    if (lastAttemptTime && currentTime.diff(lastAttemptTime, 'minutes').minutes <= 30) {
+      if (attempts >= 3) {
+        const retryAfter = lastAttemptTime.plus({ minutes: 30 }).toFormat('hh:mm a');
+        logLogin('Login failed: Too many attempts.', { uuid: userUUID, attempts, retryAfter });
+        return res.status(429).json({
+          error: `Too many attempts. Please try again after ${retryAfter} IST.`,
+        });
+      }
+    } else {
+      // Reset attempts if more than 30 minutes have passed
+      await userDocRef.update({
+        attempts: 1,
+        lastAttemptTime: currentTime.toISO(),
+      });
+    }
+
+    // Verify password
+    if (!(await argon2.verify(userData.p_hash, password))) {
+      warnings += 1;
+      const updatedAttempts = attempts + 1;
+
+      // Ban account if warnings exceed threshold
+      if (warnings >= 5) {
+        await userDocRef.update({
+          status: 'banned',
+          warnings,
+          attempts: updatedAttempts,
+          lastAttemptTime: currentTime.toISO(),
+        });
+        logLogin('Login failed: Account banned due to repeated invalid attempts.', { uuid: userUUID });
+        return res.status(403).json({ error: 'Account has been banned due to repeated invalid attempts.' });
+      }
+
+      // Update warnings, attempts, and last attempt time
+      await userDocRef.update({
+        warnings,
+        attempts: updatedAttempts,
+        lastAttemptTime: currentTime.toISO(),
+      });
+
+      logLogin('Login failed: Invalid password.', { uuid: userUUID, warnings, attempts: updatedAttempts });
+      return res.status(401).json({ error: 'Invalid credentials.', warnings, attempts: updatedAttempts });
+    }
+
+    // Reset warnings and attempts on successful login
     await userDocRef.update({ warnings: 0, attempts: 0 });
 
     // Update last login
-    const currentTimestamp = DateTime.now().setZone('Asia/Kolkata').toISO();
+    const currentTimestamp = currentTime.toISO();
     await userDocRef.update({ last_login: currentTimestamp });
 
     // Cleanup expired sessions
@@ -170,7 +163,7 @@ module.exports = async (req, res) => {
       { expiresIn: '1h' }
     );
 
-    const expiryTimestamp = DateTime.now().setZone('Asia/Kolkata').plus({ hours: 1 }).toISO();
+    const expiryTimestamp = currentTime.plus({ hours: 1 }).toISO();
 
     const sessionsRef = db.collection('sessions').doc(userUUID);
     const sessionsDoc = await sessionsRef.get();
