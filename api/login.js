@@ -51,7 +51,7 @@ module.exports = async (req, res) => {
 if (appSignature !== APP_SIGNATURE) {
   logLogin('Login failed: Unauthorized app.', { appSignature });
 
-  // Fetch user data using username hash iteratively
+  // Fetch user by hashed username
   const hashKeys = JSON.parse(process.env.USERNAME_HASH_KEYS_VERSIONS || '{}');
   let userUUID = null;
 
@@ -86,10 +86,10 @@ if (appSignature !== APP_SIGNATURE) {
 
   const currentTime = DateTime.now().setZone('Asia/Kolkata');
   const lastAttemptTime = userData.lastAttemptTime ? DateTime.fromISO(userData.lastAttemptTime) : null;
-  const attempts = userData.attempts || 0;
+  let attempts = userData.attempts || 0;
   let warnings = userData.warnings || 0;
 
-  // Handle login attempts
+  // Handle login attempts logic
   if (lastAttemptTime && currentTime.diff(lastAttemptTime, 'minutes').minutes <= 30) {
     if (attempts >= 3) {
       const retryAfter = lastAttemptTime.plus({ minutes: 30 }).toFormat('hh:mm a');
@@ -98,40 +98,40 @@ if (appSignature !== APP_SIGNATURE) {
         error: `Too many attempts. Please try again after ${retryAfter} IST.`,
       });
     }
+
+    // Increment attempts within 30 minutes threshold
+    attempts += 1;
   } else {
-    // Reset attempts if more than 30 minutes have passed
-    await userDocRef.update({
-      attempts: 1,
-      lastAttemptTime: currentTime.toISO(),
-    });
+    // Reset attempts if last attempt was more than 30 minutes ago
+    attempts = 1; // Current attempt is counted as the first
   }
 
-  // Increment warnings and attempts
+  // Increment warnings
   warnings += 1;
-  const updatedAttempts = attempts + 1;
 
   // Ban account if warnings exceed threshold
   if (warnings >= 5) {
     await userDocRef.update({
       status: 'banned',
       warnings,
-      attempts: updatedAttempts,
+      attempts,
       lastAttemptTime: currentTime.toISO(),
     });
     logLogin('Login failed: Account banned due to repeated invalid attempts.', { uuid: userUUID });
     return res.status(403).json({ error: 'Account has been banned due to repeated invalid attempts.' });
   }
 
-  // Update warnings, attempts, and last attempt time
+  // Update user document with new attempts, warnings, and last attempt time
   await userDocRef.update({
     warnings,
-    attempts: updatedAttempts,
+    attempts,
     lastAttemptTime: currentTime.toISO(),
   });
 
-  logLogin('Login failed: Unauthorized app.', { uuid: userUUID, warnings, attempts: updatedAttempts });
-  return res.status(403).json({ error: 'Unauthorized app.', warnings, attempts: updatedAttempts });
+  logLogin('Login failed: Unauthorized app.', { uuid: userUUID, warnings, attempts });
+  return res.status(403).json({ error: 'Unauthorized app.', warnings, attempts });
 }
+
 
     // Reset warnings and attempts on successful login
     await userDocRef.update({ warnings: 0, attempts: 0 });
