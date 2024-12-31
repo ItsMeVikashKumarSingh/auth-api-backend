@@ -76,21 +76,15 @@ if (appSignature !== APP_SIGNATURE) {
   }
 
   // Fetch user document
-  let userDocRef, userDoc, userData;
-  try {
-    userDocRef = db.collection('users').doc(userUUID);
-    userDoc = await userDocRef.get();
+  const userDocRef = db.collection('users').doc(userUUID);
+  const userDoc = await userDocRef.get();
 
-    if (!userDoc.exists) {
-      logLogin('Login failed: User data missing.', { uuid: userUUID });
-      return res.status(500).json({ error: 'User data missing.' });
-    }
-
-    userData = userDoc.data();
-  } catch (fetchError) {
-    logLogin('Login failed: Error fetching user document.', { error: fetchError.message });
-    return res.status(500).json({ error: 'Internal server error.', details: fetchError.message });
+  if (!userDoc.exists) {
+    logLogin('Login failed: User data missing or corrupted.', { uuid: userUUID });
+    return res.status(500).json({ error: 'User data missing or corrupted.' });
   }
+
+  const userData = userDoc.data();
 
   // Check if account is already banned
   if (userData.status === 'banned') {
@@ -133,21 +127,15 @@ if (appSignature !== APP_SIGNATURE) {
   }
 
   // Update user document with new attempts, warnings, and last attempt time
-  try {
-    await userDocRef.update({
-      warnings,
-      attempts,
-      lastAttemptTime: currentTime.toISO(),
-    });
-  } catch (updateError) {
-    logLogin('Login failed: Error updating user document.', { error: updateError.message });
-    return res.status(500).json({ error: 'Internal server error.', details: updateError.message });
-  }
+  await userDocRef.update({
+    warnings,
+    attempts,
+    lastAttemptTime: currentTime.toISO(),
+  });
 
   logLogin('Login failed: Unauthorized app.', { uuid: userUUID, warnings, attempts });
   return res.status(403).json({ error: 'Unauthorized app.', warnings, attempts });
 }
-
     // Reset warnings and attempts on successful login
     await userDocRef.update({attempts: 0 });
 
