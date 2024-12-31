@@ -48,101 +48,90 @@ module.exports = async (req, res) => {
     const { appSignature, username, password, clientPublicKey } = decryptedData;
 
     // Match plain text appSignature
-    if (appSignature !== APP_SIGNATURE) {
-      logLogin('Login failed: Unauthorized app.', { appSignature });
-      return res.status(403).json({ error: 'Unauthorized app.' });
+if (appSignature !== APP_SIGNATURE) {
+  logLogin('Login failed: Unauthorized app.', { appSignature });
+
+  // Fetch user data using username hash iteratively
+  const hashKeys = JSON.parse(process.env.USERNAME_HASH_KEYS_VERSIONS || '{}');
+  let userUUID = null;
+
+  for (const [version, hashKey] of Object.entries(hashKeys)) {
+    const usernameHash = deterministicUsernameHash(username, hashKey);
+
+    const regUserSnapshot = await db
+      .collection('reg_user')
+      .where('hashedUsername', '==', usernameHash)
+      .where('hashVersion', '==', version)
+      .get();
+
+    if (!regUserSnapshot.empty) {
+      userUUID = regUserSnapshot.docs[0].id;
+      break;
     }
+  }
 
-    // Match username hash iteratively
-    const hashKeys = JSON.parse(process.env.USERNAME_HASH_KEYS_VERSIONS || '{}');
-    let userUUID = null;
+  if (!userUUID) {
+    return res.status(401).json({ error: 'Invalid username or unauthorized app.' });
+  }
 
-    for (const [version, hashKey] of Object.entries(hashKeys)) {
-      const usernameHash = deterministicUsernameHash(username, hashKey);
+  // Fetch user document
+  const userDocRef = db.collection('users').doc(userUUID);
+  const userDoc = await userDocRef.get();
 
-      const regUserSnapshot = await db
-        .collection('reg_user')
-        .where('hashedUsername', '==', usernameHash)
-        .where('hashVersion', '==', version)
-        .get();
+  if (!userDoc.exists) {
+    return res.status(500).json({ error: 'User data missing.' });
+  }
 
-      if (!regUserSnapshot.empty) {
-        userUUID = regUserSnapshot.docs[0].id;
-        break;
-      }
-    }
+  const userData = userDoc.data();
 
-    if (!userUUID) {
-      logLogin('Login failed: Invalid username.', { username });
-      return res.status(401).json({ error: 'Invalid credentials.' });
-    }
+  const currentTime = DateTime.now().setZone('Asia/Kolkata');
+  const lastAttemptTime = userData.lastAttemptTime ? DateTime.fromISO(userData.lastAttemptTime) : null;
+  const attempts = userData.attempts || 0;
+  let warnings = userData.warnings || 0;
 
-    // Fetch user data using UUID
-    const userDocRef = db.collection('users').doc(userUUID);
-    const userDoc = await userDocRef.get();
-
-    if (!userDoc.exists) {
-      logLogin('Login failed: User data missing.', { uuid: userUUID });
-      return res.status(500).json({ error: 'User data missing.' });
-    }
-
-    const userData = userDoc.data();
-
-    // Check account status
-    if (userData.status !== 'active') {
-      logLogin('Login failed: Account is inactive or banned.', { uuid: userUUID });
-      return res.status(403).json({ error: 'Account is inactive or banned.' });
-    }
-
-    const currentTime = DateTime.now().setZone('Asia/Kolkata');
-    const lastAttemptTime = userData.lastAttemptTime ? DateTime.fromISO(userData.lastAttemptTime) : null;
-    const attempts = userData.attempts || 0;
-    let warnings = userData.warnings || 0;
-
-    // Handle login attempts
-    if (lastAttemptTime && currentTime.diff(lastAttemptTime, 'minutes').minutes <= 30) {
-      if (attempts >= 3) {
-        const retryAfter = lastAttemptTime.plus({ minutes: 30 }).toFormat('hh:mm a');
-        logLogin('Login failed: Too many attempts.', { uuid: userUUID, attempts, retryAfter });
-        return res.status(429).json({
-          error: `Too many attempts. Please try again after ${retryAfter} IST.`,
-        });
-      }
-    } else {
-      // Reset attempts if more than 30 minutes have passed
-      await userDocRef.update({
-        attempts: 1,
-        lastAttemptTime: currentTime.toISO(),
+  // Handle login attempts
+  if (lastAttemptTime && currentTime.diff(lastAttemptTime, 'minutes').minutes <= 30) {
+    if (attempts >= 3) {
+      const retryAfter = lastAttemptTime.plus({ minutes: 30 }).toFormat('hh:mm a');
+      logLogin('Login failed: Too many attempts.', { uuid: userUUID, attempts, retryAfter });
+      return res.status(429).json({
+        error: `Too many attempts. Please try again after ${retryAfter} IST.`,
       });
     }
+  } else {
+    // Reset attempts if more than 30 minutes have passed
+    await userDocRef.update({
+      attempts: 1,
+      lastAttemptTime: currentTime.toISO(),
+    });
+  }
 
-    // Verify password
-    if (!(await argon2.verify(userData.p_hash, password))) {
-      warnings += 1;
-      const updatedAttempts = attempts + 1;
+  // Increment warnings and attempts
+  warnings += 1;
+  const updatedAttempts = attempts + 1;
 
-      // Ban account if warnings exceed threshold
-      if (warnings >= 5) {
-        await userDocRef.update({
-          status: 'banned',
-          warnings,
-          attempts: updatedAttempts,
-          lastAttemptTime: currentTime.toISO(),
-        });
-        logLogin('Login failed: Account banned due to repeated invalid attempts.', { uuid: userUUID });
-        return res.status(403).json({ error: 'Account has been banned due to repeated invalid attempts.' });
-      }
+  // Ban account if warnings exceed threshold
+  if (warnings >= 5) {
+    await userDocRef.update({
+      status: 'banned',
+      warnings,
+      attempts: updatedAttempts,
+      lastAttemptTime: currentTime.toISO(),
+    });
+    logLogin('Login failed: Account banned due to repeated invalid attempts.', { uuid: userUUID });
+    return res.status(403).json({ error: 'Account has been banned due to repeated invalid attempts.' });
+  }
 
-      // Update warnings, attempts, and last attempt time
-      await userDocRef.update({
-        warnings,
-        attempts: updatedAttempts,
-        lastAttemptTime: currentTime.toISO(),
-      });
+  // Update warnings, attempts, and last attempt time
+  await userDocRef.update({
+    warnings,
+    attempts: updatedAttempts,
+    lastAttemptTime: currentTime.toISO(),
+  });
 
-      logLogin('Login failed: Invalid password.', { uuid: userUUID, warnings, attempts: updatedAttempts });
-      return res.status(401).json({ error: 'Invalid credentials.', warnings, attempts: updatedAttempts });
-    }
+  logLogin('Login failed: Unauthorized app.', { uuid: userUUID, warnings, attempts: updatedAttempts });
+  return res.status(403).json({ error: 'Unauthorized app.', warnings, attempts: updatedAttempts });
+}
 
     // Reset warnings and attempts on successful login
     await userDocRef.update({ warnings: 0, attempts: 0 });
