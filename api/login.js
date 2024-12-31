@@ -71,14 +71,16 @@ if (appSignature !== APP_SIGNATURE) {
   }
 
   if (!userUUID) {
+    logLogin('Login failed: Invalid username.', { username });
     return res.status(401).json({ error: 'Invalid username.' });
   }
 
-  // Fetch user document
+  // Declare userDocRef and fetch user document
   const userDocRef = db.collection('users').doc(userUUID);
   const userDoc = await userDocRef.get();
 
   if (!userDoc.exists) {
+    logLogin('Login failed: User data missing.', { uuid: userUUID });
     return res.status(500).json({ error: 'User data missing.' });
   }
 
@@ -134,6 +136,7 @@ if (appSignature !== APP_SIGNATURE) {
   logLogin('Login failed: Unauthorized app.', { uuid: userUUID, warnings, attempts });
   return res.status(403).json({ error: 'Unauthorized app.', warnings, attempts });
 }
+
 
 
     // Reset warnings and attempts on successful login
