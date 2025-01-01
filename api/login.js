@@ -85,7 +85,7 @@ module.exports = async (req, res) => {
     }
 
     // Fetch user data from users collection using UUID
-const userDocRef = db.collection('users').doc(userUUID.toString());
+const userDocRef = db.collection('users').doc(String(userUUID)));
 
     if (!userUUID || typeof userUUID !== 'string' || userUUID.trim() === '') {
       console.error('Invalid userUUID:', userUUID);
@@ -125,7 +125,7 @@ const userDocRef = db.collection('users').doc(userUUID.toString());
 
     const expiryTimestamp = DateTime.now().setZone('Asia/Kolkata').plus({ hours: 1 }).toISO();
 
-    const sessionsRef = db.collection('sessions').doc(userUUID.toString());
+    const sessionsRef = db.collection('sessions').doc(String(userUUID));
     const sessionsDoc = await sessionsRef.get();
 
     const updatedSessions = sessionsDoc.exists ? sessionsDoc.data() : {};
