@@ -46,29 +46,37 @@ module.exports = async (req, res) => {
     const decryptedData = JSON.parse(Buffer.from(decryptedBytes).toString());
     const { username, password, clientPublicKey } = decryptedData;
 
-    if (!username) {
+// Validate the decrypted username
+if (!username) {
   logLogin('Login failed: Missing or invalid username.', { username });
   return res.status(400).json({ error: 'Missing or invalid username.' });
 }
 
-    // Hash username and find corresponding UUID from reg_user
-    const hashKeys = JSON.parse(process.env.USERNAME_HASH_KEYS_VERSIONS || '{}');
-    let userUUID = null;
+// Hash the username and check for existence in reg_user
+const hashKeys = JSON.parse(process.env.USERNAME_HASH_KEYS_VERSIONS || '{}');
+let userUUID = null;
 
-    for (const [version, hashKey] of Object.entries(hashKeys)) {
-      const usernameHash = deterministicUsernameHash(username, hashKey);
+for (const [version, hashKey] of Object.entries(hashKeys)) {
+  const usernameHash = deterministicUsernameHash(username, hashKey);
 
-      const regUserDoc = await db.collection('reg_user').doc(usernameHash).get();
-      if (regUserDoc.exists) {
-        userUUID = regUserDoc.data().uuid;
-        break;
-      }
-    }
+  if (!usernameHash) {
+    logLogin('Login failed: Unable to generate username hash.', { username });
+    continue;
+  }
 
-    if (!userUUID) {
-      logLogin('Login failed: Invalid username.', { username });
-      return res.status(401).json({ error: 'Invalid username or password.' });
-    }
+  const regUserDoc = await db.collection('reg_user').doc(usernameHash).get();
+
+  if (regUserDoc.exists) {
+    userUUID = regUserDoc.data().uuid;
+    break;
+  }
+}
+
+if (!userUUID) {
+  logLogin('Login failed: Invalid username.', { username });
+  return res.status(401).json({ error: 'Invalid username or password.' });
+}
+
 
     // Fetch user data from users collection using UUID
     const userDocRef = db.collection('users').doc(userUUID);
