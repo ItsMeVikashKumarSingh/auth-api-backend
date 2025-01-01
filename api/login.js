@@ -84,14 +84,8 @@ module.exports = async (req, res) => {
       return res.status(401).json({ error: 'Invalid username or password.' });
     }
 
-    // Fetch user data from users collection using UUID
-const userDocRef = db.collection('users').doc(String(userUUID));
-
-    if (!userUUID || typeof userUUID !== 'string' || userUUID.trim() === '') {
-      console.error('Invalid userUUID:', userUUID);
-      return res.status(500).json({ error: 'Invalid user UUID.' });
-    }
-
+    // Validate and fetch user data
+    const userDocRef = db.collection('users').doc(String(userUUID));
     const userDoc = await userDocRef.get();
 
     if (!userDoc.exists) {
