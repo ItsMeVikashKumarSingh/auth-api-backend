@@ -10,6 +10,7 @@ const crypto = require('crypto');
 require('dotenv').config();
 
 const PRIVATE_KEY_HEX = process.env.PRIVATE_KEY_HEX;
+const PUBLIC_KEY_HEX = process.env.PUBLIC_KEY_HEX;
 
 module.exports = async (req, res) => {
   console.log('Incoming login request.', { headers: req.headers });
@@ -30,11 +31,12 @@ module.exports = async (req, res) => {
     await sodium.ready;
 
     const privateKey = Uint8Array.from(Buffer.from(PRIVATE_KEY_HEX, 'hex'));
+    const publicKey = Uint8Array.from(Buffer.from(PUBLIC_KEY_HEX, 'hex'));
     const sealedBox = Uint8Array.from(Buffer.from(encryptedData, 'base64'));
 
     let decryptedBytes;
     try {
-      decryptedBytes = sodium.crypto_box_seal_open(sealedBox, privateKey, privateKey);
+      decryptedBytes = sodium.crypto_box_seal_open(sealedBox, publicKey, privateKey);
     } catch (error) {
       console.error('Decryption failed:', error.message);
       return res.status(400).json({ error: 'Decryption failed.', details: error.message });
