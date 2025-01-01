@@ -1,7 +1,6 @@
 const argon2 = require('argon2');
 const jwt = require('jsonwebtoken');
 const db = require('../utils/firebaseAdmin');
-const { logLogin } = require('../utils/logger');
 const sodium = require('libsodium-wrappers');
 const deterministicUsernameHash = require('../utils/deterministicUsernameHash');
 const { cleanupExpiredSessions } = require('../utils/helpers');
@@ -11,13 +10,12 @@ const crypto = require('crypto');
 require('dotenv').config();
 
 const PRIVATE_KEY_HEX = process.env.PRIVATE_KEY_HEX;
-const PUBLIC_KEY_HEX = process.env.PUBLIC_KEY_HEX;
 
 module.exports = async (req, res) => {
-  logLogin('Incoming login request.', { headers: req.headers });
+  console.log('Incoming login request.', { headers: req.headers });
 
   if (req.method !== 'POST') {
-    logLogin('Login failed: Method not allowed.');
+    console.log('Login failed: Method not allowed.');
     return res.status(405).json({ error: 'Method not allowed.' });
   }
 
@@ -25,19 +23,18 @@ module.exports = async (req, res) => {
     const { encryptedData } = req.body;
 
     if (!encryptedData) {
-      logLogin('Login failed: Missing encrypted data.');
+      console.log('Login failed: Missing encrypted data.');
       return res.status(400).json({ error: 'Missing encrypted data.' });
     }
 
     await sodium.ready;
 
     const privateKey = Uint8Array.from(Buffer.from(PRIVATE_KEY_HEX, 'hex'));
-    const publicKey = Uint8Array.from(Buffer.from(PUBLIC_KEY_HEX, 'hex'));
     const sealedBox = Uint8Array.from(Buffer.from(encryptedData, 'base64'));
 
     let decryptedBytes;
     try {
-      decryptedBytes = sodium.crypto_box_seal_open(sealedBox, publicKey, privateKey);
+      decryptedBytes = sodium.crypto_box_seal_open(sealedBox, privateKey, privateKey);
     } catch (error) {
       console.error('Decryption failed:', error.message);
       return res.status(400).json({ error: 'Decryption failed.', details: error.message });
@@ -46,44 +43,48 @@ module.exports = async (req, res) => {
     const decryptedData = JSON.parse(Buffer.from(decryptedBytes).toString());
     const { username, password, clientPublicKey } = decryptedData;
 
-// Validate the decrypted username
-if (!username) {
-  logLogin('Login failed: Missing or invalid username.', { username });
-  return res.status(400).json({ error: 'Missing or invalid username.' });
-}
+    if (!username || typeof username !== 'string' || username.trim() === '') {
+      console.log('Login failed: Missing or invalid username.', { username });
+      return res.status(400).json({ error: 'Missing or invalid username.' });
+    }
 
-// Hash the username and check for existence in reg_user
-const hashKeys = JSON.parse(process.env.USERNAME_HASH_KEYS_VERSIONS || '{}');
-let userUUID = null;
+    // Hash username and find corresponding UUID from reg_user
+    const hashKeys = JSON.parse(process.env.USERNAME_HASH_KEYS_VERSIONS || '{}');
+    let userUUID = null;
 
-for (const [version, hashKey] of Object.entries(hashKeys)) {
-  const usernameHash = deterministicUsernameHash(username, hashKey);
+    for (const [version, hashKey] of Object.entries(hashKeys)) {
+      const usernameHash = deterministicUsernameHash(username, hashKey);
 
-  if (!usernameHash) {
-    logLogin('Login failed: Unable to generate username hash.', { username });
-    continue;
-  }
+      if (!usernameHash || typeof usernameHash !== 'string') {
+        console.log('Login failed: Invalid username hash.', { username });
+        continue;
+      }
 
-  const regUserDoc = await db.collection('reg_user').doc(usernameHash).get();
+      try {
+        const regUserDoc = await db.collection('reg_user').doc(usernameHash).get();
 
-  if (regUserDoc.exists) {
-    userUUID = regUserDoc.data().uuid;
-    break;
-  }
-}
+        if (regUserDoc.exists) {
+          userUUID = regUserDoc.data().uuid;
+          break;
+        }
+      } catch (error) {
+        console.error('Firestore query error:', error.message);
+        console.log('Login failed: Firestore query error.', { usernameHash, error: error.message });
+        return res.status(500).json({ error: 'Database query error.', details: error.message });
+      }
+    }
 
-if (!userUUID) {
-  logLogin('Login failed: Invalid username.', { username });
-  return res.status(401).json({ error: 'Invalid username or password.' });
-}
-
+    if (!userUUID) {
+      console.log('Login failed: User not found.', { username });
+      return res.status(401).json({ error: 'Invalid username or password.' });
+    }
 
     // Fetch user data from users collection using UUID
     const userDocRef = db.collection('users').doc(userUUID);
     const userDoc = await userDocRef.get();
 
     if (!userDoc.exists) {
-      logLogin('Login failed: User data missing or corrupted.', { uuid: userUUID });
+      console.log('Login failed: User data missing or corrupted.', { uuid: userUUID });
       return res.status(500).json({ error: 'User data missing or corrupted.' });
     }
 
@@ -91,7 +92,7 @@ if (!userUUID) {
 
     // Verify password
     if (!(await argon2.verify(userData.p_hash, password))) {
-      logLogin('Login failed: Invalid password.', { uuid: userUUID });
+      console.log('Login failed: Invalid password.', { uuid: userUUID });
       return res.status(401).json({ error: 'Invalid username or password.' });
     }
 
@@ -140,13 +141,13 @@ if (!userUUID) {
       clientPublicKeyBytes
     );
 
-    logLogin('Login successful.', { uuid: userUUID, sessionId });
+    console.log('Login successful.', { uuid: userUUID, sessionId });
     return res.status(200).json({
       encryptedData: Buffer.from(encryptedResponse).toString('base64'),
     });
   } catch (error) {
     console.error('Error during login:', error);
-    logLogin('Login failed due to server error.', { error: error.message });
+    console.log('Login failed due to server error.', { error: error.message });
     return res.status(500).json({ error: 'Login failed.', details: error.message });
   }
 };
