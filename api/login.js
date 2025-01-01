@@ -46,6 +46,11 @@ module.exports = async (req, res) => {
     const decryptedData = JSON.parse(Buffer.from(decryptedBytes).toString());
     const { username, password, clientPublicKey } = decryptedData;
 
+    if (!username) {
+  logLogin('Login failed: Missing or invalid username.', { username });
+  return res.status(400).json({ error: 'Missing or invalid username.' });
+}
+
     // Hash username and find corresponding UUID from reg_user
     const hashKeys = JSON.parse(process.env.USERNAME_HASH_KEYS_VERSIONS || '{}');
     let userUUID = null;
