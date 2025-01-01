@@ -106,7 +106,7 @@ module.exports = async (req, res) => {
     await userDocRef.update({ last_login: currentTimestamp });
 
     // Cleanup expired sessions
-    await cleanupExpiredSessions(userUUID);
+    await cleanupExpiredSessions(String(userUUID));
 
     // Generate new session
     const sessionId = crypto.randomUUID();
