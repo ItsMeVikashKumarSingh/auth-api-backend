@@ -80,9 +80,72 @@ module.exports = async (req, res) => {
       return res.status(401).json({ error: 'Invalid username or password.' });
     }
 
-    // Fetch user data and continue login process...
-    console.log('Login successful for user:', userUUID);
-    return res.status(200).json({ message: 'Login successful.' });
+    // Fetch user data from users collection using UUID
+    const userDocRef = db.collection('users').doc(userUUID);
+    const userDoc = await userDocRef.get();
+
+    if (!userDoc.exists) {
+      console.log('Login failed: User data missing or corrupted.', { uuid: userUUID });
+      return res.status(500).json({ error: 'User data missing or corrupted.' });
+    }
+
+    const userData = userDoc.data();
+
+    // Verify password
+    if (!(await argon2.verify(userData.p_hash, password))) {
+      console.log('Login failed: Invalid password.', { uuid: userUUID });
+      return res.status(401).json({ error: 'Invalid username or password.' });
+    }
+
+    // Update last login
+    const currentTimestamp = DateTime.now().setZone('Asia/Kolkata').toISO();
+    await userDocRef.update({ last_login: currentTimestamp });
+
+    // Cleanup expired sessions
+    await cleanupExpiredSessions(userUUID);
+
+    // Generate new session
+    const sessionId = crypto.randomUUID();
+    const { key: jwtKey, version: jwtVersion } = getActiveJwtKey();
+    const token = jwt.sign(
+      { uuid: userUUID, sessionId, keyVersion: jwtVersion },
+      jwtKey,
+      { expiresIn: '1h' }
+    );
+
+    const expiryTimestamp = DateTime.now().setZone('Asia/Kolkata').plus({ hours: 1 }).toISO();
+
+    const sessionsRef = db.collection('sessions').doc(userUUID);
+    const sessionsDoc = await sessionsRef.get();
+
+    const updatedSessions = sessionsDoc.exists ? sessionsDoc.data() : {};
+    updatedSessions[sessionId] = {
+      token,
+      expires_at: expiryTimestamp,
+      jwt_version: jwtVersion,
+    };
+
+    // Save updated sessions
+    await sessionsRef.set(updatedSessions);
+
+    // Encrypt response
+    const responseData = {
+      message: 'Login successful.',
+      token,
+      expires_at: expiryTimestamp,
+      uuid: userUUID, // Include uuid in the response
+    };
+
+    const clientPublicKeyBytes = Uint8Array.from(Buffer.from(clientPublicKey, 'hex'));
+    const encryptedResponse = sodium.crypto_box_seal(
+      Buffer.from(JSON.stringify(responseData)),
+      clientPublicKeyBytes
+    );
+
+    console.log('Login successful.', { uuid: userUUID, sessionId });
+    return res.status(200).json({
+      encryptedData: Buffer.from(encryptedResponse).toString('base64'),
+    });
   } catch (error) {
     console.error('Error during login:', error);
     console.log('Login failed due to server error.', { error: error.message });
