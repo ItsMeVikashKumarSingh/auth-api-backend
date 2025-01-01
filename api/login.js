@@ -85,7 +85,7 @@ module.exports = async (req, res) => {
     }
 
     // Fetch user data from users collection using UUID
-const userDocRef = db.collection('users').doc(String(userUUID)));
+const userDocRef = db.collection('users').doc(String(userUUID));
 
     if (!userUUID || typeof userUUID !== 'string' || userUUID.trim() === '') {
       console.error('Invalid userUUID:', userUUID);
