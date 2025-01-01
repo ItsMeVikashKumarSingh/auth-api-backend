@@ -86,6 +86,12 @@ module.exports = async (req, res) => {
 
     // Fetch user data from users collection using UUID
     const userDocRef = db.collection('users').doc(userUUID);
+
+    if (!userUUID || typeof userUUID !== 'string' || userUUID.trim() === '') {
+      console.error('Invalid userUUID:', userUUID);
+      return res.status(500).json({ error: 'Invalid user UUID.' });
+    }
+
     const userDoc = await userDocRef.get();
 
     if (!userDoc.exists) {
@@ -137,7 +143,7 @@ module.exports = async (req, res) => {
       message: 'Login successful.',
       token,
       expires_at: expiryTimestamp,
-      uuid: userUUID, // Include uuid in the response
+      uuid: userUUID,
     };
 
     const clientPublicKeyBytes = Uint8Array.from(Buffer.from(clientPublicKey, 'hex'));
