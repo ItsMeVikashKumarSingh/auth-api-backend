@@ -3,16 +3,15 @@ const jwt = require('jsonwebtoken');
 const db = require('../utils/firebaseAdmin');
 const { logLogin } = require('../utils/logger');
 const sodium = require('libsodium-wrappers');
-const { getHashKey, getActiveJwtKey } = require('../utils/keyManager');
 const deterministicUsernameHash = require('../utils/deterministicUsernameHash');
 const { cleanupExpiredSessions } = require('../utils/helpers');
+const { getHashKey, getActiveJwtKey } = require('../utils/keyManager');
 const { DateTime } = require('luxon');
 const crypto = require('crypto');
 require('dotenv').config();
 
 const PRIVATE_KEY_HEX = process.env.PRIVATE_KEY_HEX;
 const PUBLIC_KEY_HEX = process.env.PUBLIC_KEY_HEX;
-const APP_SIGNATURE = process.env.APP_SIGNATURE;
 
 module.exports = async (req, res) => {
   logLogin('Incoming login request.', { headers: req.headers });
@@ -21,8 +20,6 @@ module.exports = async (req, res) => {
     logLogin('Login failed: Method not allowed.');
     return res.status(405).json({ error: 'Method not allowed.' });
   }
-
-  let userDocRef; // Declare at the top to avoid reference errors
 
   try {
     const { encryptedData } = req.body;
@@ -47,41 +44,29 @@ module.exports = async (req, res) => {
     }
 
     const decryptedData = JSON.parse(Buffer.from(decryptedBytes).toString());
-    const { appSignature, username, password, clientPublicKey } = decryptedData;
+    const { username, password, clientPublicKey } = decryptedData;
 
-    // Match plain text appSignature
-    if (appSignature !== APP_SIGNATURE) {
-      logLogin('Login failed: Unauthorized app.', { appSignature });
-      return res.status(403).json({ error: 'Unauthorized app.' });
-    }
-
-    // Fetch user by hashed username
+    // Hash username and find corresponding UUID from reg_user
     const hashKeys = JSON.parse(process.env.USERNAME_HASH_KEYS_VERSIONS || '{}');
     let userUUID = null;
 
     for (const [version, hashKey] of Object.entries(hashKeys)) {
       const usernameHash = deterministicUsernameHash(username, hashKey);
 
-      const regUserSnapshot = await db
-        .collection('reg_user')
-        .where('hashedUsername', '==', usernameHash)
-        .where('hashVersion', '==', version)
-        .get();
-
-      if (!regUserSnapshot.empty) {
-        userUUID = regUserSnapshot.docs[0].id;
+      const regUserDoc = await db.collection('reg_user').doc(usernameHash).get();
+      if (regUserDoc.exists) {
+        userUUID = regUserDoc.data().uuid;
         break;
       }
     }
 
     if (!userUUID) {
       logLogin('Login failed: Invalid username.', { username });
-      return res.status(401).json({ error: 'Invalid username.' });
+      return res.status(401).json({ error: 'Invalid username or password.' });
     }
 
-    // Initialize userDocRef after validating userUUID
-    userDocRef = db.collection('users').doc(userUUID);
-
+    // Fetch user data from users collection using UUID
+    const userDocRef = db.collection('users').doc(userUUID);
     const userDoc = await userDocRef.get();
 
     if (!userDoc.exists) {
@@ -91,16 +76,10 @@ module.exports = async (req, res) => {
 
     const userData = userDoc.data();
 
-    // Check if account is already banned
-    if (userData.status === 'banned') {
-      logLogin('Login failed: Account is banned.', { uuid: userUUID });
-      return res.status(403).json({ error: 'You are banned.' });
-    }
-
     // Verify password
     if (!(await argon2.verify(userData.p_hash, password))) {
       logLogin('Login failed: Invalid password.', { uuid: userUUID });
-      return res.status(401).json({ error: 'Invalid credentials.' });
+      return res.status(401).json({ error: 'Invalid username or password.' });
     }
 
     // Update last login
@@ -131,6 +110,7 @@ module.exports = async (req, res) => {
       jwt_version: jwtVersion,
     };
 
+    // Save updated sessions
     await sessionsRef.set(updatedSessions);
 
     // Encrypt response
@@ -138,6 +118,7 @@ module.exports = async (req, res) => {
       message: 'Login successful.',
       token,
       expires_at: expiryTimestamp,
+      uuid: userUUID, // Include uuid in the response
     };
 
     const clientPublicKeyBytes = Uint8Array.from(Buffer.from(clientPublicKey, 'hex'));
