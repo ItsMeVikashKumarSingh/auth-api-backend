@@ -45,8 +45,10 @@ module.exports = async (req, res) => {
     const decryptedData = JSON.parse(Buffer.from(decryptedBytes).toString());
     const { username, password, clientPublicKey } = decryptedData;
 
+    console.log('Decrypted username:', username);
+
     if (!username || typeof username !== 'string' || username.trim() === '') {
-      console.log('Login failed: Missing or invalid username.', { username });
+      console.log('Login failed: Missing or invalid username.');
       return res.status(400).json({ error: 'Missing or invalid username.' });
     }
 
@@ -56,8 +58,10 @@ module.exports = async (req, res) => {
     for (const [version, hashKey] of Object.entries(hashKeys)) {
       const usernameHash = deterministicUsernameHash(username, hashKey);
 
+      console.log('Generated username hash:', usernameHash);
+
       if (!usernameHash || typeof usernameHash !== 'string') {
-        console.log('Login failed: Invalid username hash.', { username });
+        console.log('Invalid username hash for version:', version);
         continue;
       }
 
@@ -66,17 +70,17 @@ module.exports = async (req, res) => {
 
         if (regUserDoc.exists) {
           userUUID = regUserDoc.data().uuid;
+          console.log('User found with UUID:', userUUID);
           break;
         }
       } catch (error) {
-        console.error('Firestore query error:', error.message);
-        console.log('Login failed: Firestore query error.', { usernameHash, error: error.message });
+        console.error('Firestore query failed for usernameHash:', usernameHash, error.message);
         return res.status(500).json({ error: 'Database query error.', details: error.message });
       }
     }
 
     if (!userUUID) {
-      console.log('Login failed: User not found.', { username });
+      console.log('Login failed: User not found.');
       return res.status(401).json({ error: 'Invalid username or password.' });
     }
 
