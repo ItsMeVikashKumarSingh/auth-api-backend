@@ -7,6 +7,7 @@ const { cleanupExpiredSessions } = require('../utils/helpers');
 const { getHashKey, getActiveJwtKey } = require('../utils/keyManager');
 const { DateTime } = require('luxon');
 const crypto = require('crypto');
+const { logLogin } = require('../utils/logger');
 require('dotenv').config();
 
 const PRIVATE_KEY_HEX = process.env.PRIVATE_KEY_HEX;
@@ -14,9 +15,11 @@ const PUBLIC_KEY_HEX = process.env.PUBLIC_KEY_HEX;
 
 module.exports = async (req, res) => {
   console.log('Incoming login request.', { headers: req.headers });
+  logLogin('Incoming login request.', { headers: req.headers });
 
   if (req.method !== 'POST') {
     console.log('Login failed: Method not allowed.');
+    logLogin('Login failed: Method not allowed.');
     return res.status(405).json({ error: 'Method not allowed.' });
   }
 
@@ -25,6 +28,7 @@ module.exports = async (req, res) => {
 
     if (!encryptedData) {
       console.log('Login failed: Missing encrypted data.');
+      logLogin('Login failed: Missing encrypted data.');
       return res.status(400).json({ error: 'Missing encrypted data.' });
     }
 
@@ -39,6 +43,7 @@ module.exports = async (req, res) => {
       decryptedBytes = sodium.crypto_box_seal_open(sealedBox, publicKey, privateKey);
     } catch (error) {
       console.error('Decryption failed:', error.message);
+      logLogin('Decryption failed.', { error: error.message });
       return res.status(400).json({ error: 'Decryption failed.', details: error.message });
     }
 
@@ -46,9 +51,11 @@ module.exports = async (req, res) => {
     const { username, password, clientPublicKey } = decryptedData;
 
     console.log('Decrypted username:', username);
+    logLogin('Decrypted username.', { username });
 
     if (!username || typeof username !== 'string' || username.trim() === '') {
       console.log('Login failed: Missing or invalid username.');
+      logLogin('Login failed: Missing or invalid username.');
       return res.status(400).json({ error: 'Missing or invalid username.' });
     }
 
@@ -59,9 +66,11 @@ module.exports = async (req, res) => {
       const usernameHash = deterministicUsernameHash(username, hashKey);
 
       console.log('Generated username hash:', usernameHash);
+      logLogin('Generated username hash.', { version, usernameHash });
 
       if (!usernameHash || typeof usernameHash !== 'string') {
         console.log('Invalid username hash for version:', version);
+        logLogin('Invalid username hash for version.', { version });
         continue;
       }
 
@@ -71,44 +80,44 @@ module.exports = async (req, res) => {
         if (regUserDoc.exists) {
           userUUID = regUserDoc.data().uuid;
           console.log('User found with UUID:', userUUID);
+          logLogin('User found with UUID.', { uuid: userUUID });
           break;
         }
       } catch (error) {
         console.error('Firestore query failed for usernameHash:', usernameHash, error.message);
+        logLogin('Firestore query failed for usernameHash.', { usernameHash, error: error.message });
         return res.status(500).json({ error: 'Database query error.', details: error.message });
       }
     }
 
     if (!userUUID) {
       console.log('Login failed: User not found.');
+      logLogin('Login failed: User not found.');
       return res.status(401).json({ error: 'Invalid username or password.' });
     }
 
-    // Validate and fetch user data
     const userDocRef = db.collection('users').doc(String(userUUID));
     const userDoc = await userDocRef.get();
 
     if (!userDoc.exists) {
       console.log('Login failed: User data missing or corrupted.', { uuid: userUUID });
+      logLogin('Login failed: User data missing or corrupted.', { uuid: userUUID });
       return res.status(500).json({ error: 'User data missing or corrupted.' });
     }
 
     const userData = userDoc.data();
 
-    // Verify password
     if (!(await argon2.verify(userData.p_hash, password))) {
       console.log('Login failed: Invalid password.', { uuid: userUUID });
+      logLogin('Login failed: Invalid password.', { uuid: userUUID });
       return res.status(401).json({ error: 'Invalid username or password.' });
     }
 
-    // Update last login
     const currentTimestamp = DateTime.now().setZone('Asia/Kolkata').toISO();
     await userDocRef.update({ last_login: currentTimestamp });
 
-    // Cleanup expired sessions
     await cleanupExpiredSessions(String(userUUID));
 
-    // Generate new session
     const sessionId = crypto.randomUUID();
     const { key: jwtKey, version: jwtVersion } = getActiveJwtKey();
     const token = jwt.sign(
@@ -129,10 +138,8 @@ module.exports = async (req, res) => {
       jwt_version: jwtVersion,
     };
 
-    // Save updated sessions
     await sessionsRef.set(updatedSessions);
 
-    // Encrypt response
     const responseData = {
       message: 'Login successful.',
       token,
@@ -147,12 +154,13 @@ module.exports = async (req, res) => {
     );
 
     console.log('Login successful.', { uuid: userUUID, sessionId });
+    logLogin('Login successful.', { uuid: userUUID, sessionId });
     return res.status(200).json({
       encryptedData: Buffer.from(encryptedResponse).toString('base64'),
     });
   } catch (error) {
     console.error('Error during login:', error);
-    console.log('Login failed due to server error.', { error: error.message });
+    logLogin('Login failed due to server error.', { error: error.message });
     return res.status(500).json({ error: 'Login failed.', details: error.message });
   }
 };
