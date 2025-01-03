@@ -115,134 +115,178 @@ This project implements a secure and robust authentication system with support f
 
 ## API Details
 
-### 1. Register API
-**Endpoint:** `POST /api/register`
-
-**Request:**
+### **1. Register API**
+- **Endpoint**: `POST /api/register`
+- **Purpose**: Registers a new user.
+- **Request**:
 ```json
 {
-  "encryptedData": "BASE64_ENCRYPTED_DATA"
+  "encryptedData": "BASE64_ENCRYPTED_PAYLOAD"
 }
 ```
-**Decrypted Request:**
+- **Decrypted Payload**:
 ```json
 {
-  "username": "plain_username",
-  "password": "plain_password",
-  "clientPublicKey": "client_public_key"
+  "username": "plain_text_username",
+  "password": "plain_text_password",
+  "clientPublicKey": "HEX_PUBLIC_KEY"
 }
 ```
-
-**Response:**
+- **Response**:
 ```json
 {
   "encryptedData": "BASE64_ENCRYPTED_RESPONSE"
 }
 ```
-**Decrypted Response:**
+- **Decrypted Response**:
 ```json
 {
   "message": "User registered successfully.",
-  "backupCode": "plain_backup_code",
-  "uuid": "1"
+  "backupKey": "BACKUP_KEY",
+  "uuid": "USER_UUID"
 }
 ```
+- **Database Changes**:
+  - **`reg_user` Collection**:
+    ```json
+    {
+      "usernameHash": "HASHED_USERNAME",
+      "uuid": "USER_UUID"
+    }
+    ```
+  - **`users` Collection**:
+    ```json
+    {
+      "uuid": "USER_UUID",
+      "p_hash": "HASHED_PASSWORD",
+      "b_code": "HASHED_BACKUP_KEY",
+      "bio": "Default bio",
+      "name": "Default name",
+      "p_pic": "Default profile picture URL",
+      "status": "active",
+      "created_at": "TIMESTAMP",
+      "last_login": null
+    }
+    ```
 
-### 2. Login API
-**Endpoint:** `POST /api/login`
+---
 
-**Request:**
+### **2. Login API**
+- **Endpoint**: `POST /api/login`
+- **Purpose**: Authenticates an existing user.
+- **Request**:
 ```json
 {
-  "encryptedData": "BASE64_ENCRYPTED_DATA"
+  "encryptedData": "BASE64_ENCRYPTED_PAYLOAD"
 }
 ```
-**Decrypted Request:**
+- **Decrypted Payload**:
 ```json
 {
-  "username": "plain_username",
-  "password": "plain_password",
-  "clientPublicKey": "client_public_key"
+  "username": "plain_text_username",
+  "password": "plain_text_password",
+  "clientPublicKey": "HEX_PUBLIC_KEY"
 }
 ```
-
-**Response:**
+- **Response**:
 ```json
 {
   "encryptedData": "BASE64_ENCRYPTED_RESPONSE"
 }
 ```
-**Decrypted Response:**
+- **Decrypted Response**:
 ```json
 {
   "message": "Login successful.",
-  "token": "jwt_token",
-  "uuid": "1",
-  "expires_at": "2024-01-15T11:30:00.000+05:30"
+  "token": "SESSION_TOKEN",
+  "expires_at": "SESSION_EXPIRY_TIME",
+  "uuid": "USER_UUID"
 }
 ```
+- **Database Changes**:
+  - Updates `last_login` in the `users` collection.
+  - Adds a new session in the `sessions` collection.
 
-### 3. Generate Authenticator QR API
-**Endpoint:** `POST /api/generate-qr`
+---
 
-**Request:**
+### **3. Store Security Questions and Answers**
+- **Endpoint**: `POST /api/store-user-questions`
+- **Purpose**: Stores the user's selected security questions and hashed answers.
+- **Request**:
 ```json
 {
-  "encryptedData": "BASE64_ENCRYPTED_DATA"
+  "encryptedData": "BASE64_ENCRYPTED_PAYLOAD"
 }
 ```
-**Decrypted Request:**
+- **Decrypted Payload**:
 ```json
 {
-  "uuid": "1",
-  "clientPublicKey": "client_public_key"
+  "uuid": "USER_UUID",
+  "selectedQuestions": [0, 4, 7, 11, 20],
+  "answers": ["plain_text_answer1", "plain_text_answer2", "plain_text_answer3"]
 }
 ```
+- **Response**:
+```json
+{
+  "message": "Security questions stored successfully."
+}
+```
+- **Database Changes**:
+  - **`user_questions` Collection**:
+    ```json
+    {
+      "uuid": "USER_UUID",
+      "questions": [
+        { "questionId": 0, "answerHash": "HASHED_ANSWER" },
+        { "questionId": 4, "answerHash": "HASHED_ANSWER" },
+        ...
+      ]
+    }
+    ```
 
-**Response:**
-```json
-{
-  "encryptedData": "BASE64_ENCRYPTED_RESPONSE"
-}
-```
-**Decrypted Response:**
-```json
-{
-  "message": "QR code generated successfully.",
-  "qrCodeUrl": "data:image/png;base64,..."
-}
-```
+---
 
-### 4. Enable Authenticator API
-**Endpoint:** `POST /api/enable-authenticator`
+### **4. App Signature Verification API**
+- **Endpoint**: `POST /api/verify-signature`
+- **Purpose**: Verifies app signature and device unique ID.
+- **Request**:
+```json
+{
+  "signature": "PLAIN_TEXT_SIGNATURE",
+  "deviceId": "DEVICE_UNIQUE_ID"
+}
+```
+- **Response**:
+  - If signature is valid:
+    ```json
+    {
+      "encryptedData": "BASE64_ENCRYPTED_RESPONSE"
+    }
+    ```
+    - **Decrypted Response**:
+      ```json
+      {
+        "message": "App verified.",
+        "serverPublicKey": "SERVER_PUBLIC_KEY"
+      }
+      ```
+  - If signature is invalid:
+    ```json
+    {
+      "error": "Unauthorized app. Please use the official app."
+    }
+    ```
+- **Database Changes**:
+  - Warnings are stored in the `ban` collection for unauthorized devices.
+    ```json
+    {
+      "device": {
+        "DEVICE_UNIQUE_ID": WARNING_COUNT
+      }
+    }
+    ```
 
-**Request:**
-```json
-{
-  "encryptedData": "BASE64_ENCRYPTED_DATA"
-}
-```
-**Decrypted Request:**
-```json
-{
-  "uuid": "1",
-  "totpCode": "123456",
-  "clientPublicKey": "client_public_key"
-}
-```
-
-**Response:**
-```json
-{
-  "encryptedData": "BASE64_ENCRYPTED_RESPONSE"
-}
-```
-**Decrypted Response:**
-```json
-{
-  "message": "Authenticator enabled successfully."
-}
-```
 
 ---
 
@@ -262,3 +306,10 @@ This project implements a secure and robust authentication system with support f
 
 ### Session Cleanup
 - Removes expired sessions to maintain session hygiene.
+
+
+
+
+Here’s a **copy-paste-friendly version** of the updated README.md:
+
+---

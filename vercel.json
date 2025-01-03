@@ -30,6 +30,10 @@
     {
       "src": "/api/forgotpassword",
       "dest": "api/forgotPassword.js"
+    },
+    {
+      "src": "/api/store-answer",
+      "dest": "api/store-answer.js"
     }
   ]
 }
