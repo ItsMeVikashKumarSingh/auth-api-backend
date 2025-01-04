@@ -14,15 +14,11 @@ This project implements a secure and robust authentication system with support f
 - Support for multiple active sessions.
 - Encrypted responses for added security.
 
-### Forgot Password
-- Backup key mechanism.
-- Security questions mechanism.
-- Third-party authenticator integration.
+### App Signature Verification API
+- Verify user and send them server public key
 
-### Two-Factor Authentication
-- Generate QR code for TOTP setup.
-- Validate TOTP during login or operations.
-- Encrypted responses for secure communication.
+### Store Security Questions and Answers
+- Store user questions and answers 
 
 ---
 
@@ -248,7 +244,7 @@ This project implements a secure and robust authentication system with support f
 ---
 
 ### **4. App Signature Verification API**
-- **Endpoint**: `POST /api/verify-signature`
+- **Endpoint**: `POST /api/getapi`
 - **Purpose**: Verifies app signature and device unique ID.
 - **Request**:
 ```json
