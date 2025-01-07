@@ -5,13 +5,21 @@ const MONGO_URI = process.env.MONGO_URI; // Add this to your .env or Vercel envi
 
 // Initialize a global MongoDB client
 let mongoClient;
+let isConnected = false; // Track connection status
 
 async function connectToMongo() {
-  if (!mongoClient || !mongoClient.isConnected()) {
+  if (!mongoClient || !isConnected) {
     console.log('[DEBUG] MongoDB client not connected. Attempting to connect...');
     mongoClient = new MongoClient(MONGO_URI, { useNewUrlParser: true, useUnifiedTopology: true });
-    await mongoClient.connect();
-    console.log('[DEBUG] MongoDB connected.');
+
+    try {
+      await mongoClient.connect();
+      isConnected = true; // Update connection status
+      console.log('[DEBUG] MongoDB connected.');
+    } catch (error) {
+      console.error('[ERROR] MongoDB connection failed:', error.message);
+      throw error;
+    }
   } else {
     console.log('[DEBUG] MongoDB already connected.');
   }
@@ -47,6 +55,7 @@ async function logToMongo(logType, message, data = {}) {
     if (error.message.includes('ECONNRESET') || error.message.includes('timed out')) {
       console.log('[DEBUG] Retrying MongoDB log insertion...');
       try {
+        isConnected = false; // Reset connection status
         await connectToMongo(); // Reconnect if necessary
         await logToMongo(logType, message, data); // Retry logging
       } catch (retryError) {
