@@ -91,7 +91,7 @@ module.exports = async (req, res) => {
       u_hash: usernameHash,
       p_hash: passwordHash,
       created_at: currentTimestamp,
-      b_code: backupCodeHash,
+      b_hash: backupCodeHash,
       bio: DEFAULT_BIO,
       name: DEFAULT_NAME,
       p_pic: DEFAULT_PROFILE_PIC,
@@ -108,8 +108,7 @@ module.exports = async (req, res) => {
     // Encrypt response with clientPublicKey
     const responseData = {
       message: 'User registered successfully.',
-      backupCode; backupCode,
-      uuid: nextUUID,
+      backupCode: backupCode
     };
 
     const clientPublicKeyBytes = Uint8Array.from(Buffer.from(clientPublicKey, 'hex'));
