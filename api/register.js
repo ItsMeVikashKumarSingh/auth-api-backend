@@ -108,7 +108,7 @@ module.exports = async (req, res) => {
     // Encrypt response with clientPublicKey
     const responseData = {
       message: 'User registered successfully.',
-      backupCode,
+      backupCode; backupCode,
       uuid: nextUUID,
     };
 
