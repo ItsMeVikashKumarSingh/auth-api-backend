@@ -304,8 +304,4 @@ This project implements a secure and robust authentication system with support f
 - Removes expired sessions to maintain session hygiene.
 
 
-
-
-Here’s a **copy-paste-friendly version** of the updated README.md:
-
 ---
